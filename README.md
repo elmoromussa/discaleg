@@ -71,10 +71,12 @@ L’aplicació pot arrencar **sense cap fitxer de base de dades**. En aquest cas
 | `/search` | Cerca per paraula clau (nom o ruta); filtre opcional per disc |
 | `/duplicates/name` | Fitxers amb el mateix nom en més d'un disc |
 | `/duplicates/name-size` | Fitxers amb el mateix nom i mida en més d'un disc |
+| `/duplicates?mode=hash` | Fitxers amb el mateix contingut (SHA-256), amb espai recuperable |
 | `/extensions` | Llistat d'estadístiques per extensió (paginat) |
 | `/folders` | Llistat de carpetes per mida (paginat) |
 | `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre + contingut) |
-| `/discs` | Gestió de discs: auditar i incorporar o actualitzar un disc |
+| `/discs` | Gestió de discs: escanejar i incorporar o actualitzar un disc (en segon pla, amb progrés) |
+| `/api/scan/status` | Estat JSON de l'escaneig en segon pla |
 | `/health` | Comprova si la DB existeix (retorn JSON) |
 
 ## Documentació

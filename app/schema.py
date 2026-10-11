@@ -5,11 +5,13 @@ Versió (PRAGMA user_version):
   0/1  esquema original: inventory, folder_stats, by_extension (sense drives ni hashes)
   2    + drives, scans, columnes de hash i de seguiment a inventory, índex únic
          (drive_id, relative_path), extensió buida -> '(no_ext)', folder_path relatiu.
+  3    + índex de text complet FTS5 (trigram) sobre inventory(name, relative_path),
+         mantingut amb triggers; accelera la cerca per subcadena.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
-  - migrate(conn, ...): porta una DB existent a la versió actual (idempotent, pot
-    tardar uns minuts amb milions de files; executar amb `python -m app.migrate`).
+  - migrate(conn, ...): porta una DB existent a la versió actual pas a pas (idempotent;
+    pot tardar minuts amb milions de files; executar amb `python -m app.migrate`).
 """
 from __future__ import annotations
 
@@ -17,13 +19,16 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Extensió canònica per a fitxers sense extensió (coincideix amb l'escàner directe).
 NO_EXT = "(no_ext)"
 
 # Hash SHA-256 (hex) d'un fitxer de 0 bytes; s'assigna sense obrir el fitxer.
 SHA256_EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+# Nom de la taula FTS5 (consultada des de queries.py)
+FTS_TABLE = "inventory_fts"
 
 
 def utc_now_iso() -> str:
@@ -46,7 +51,7 @@ def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def is_legacy_db(conn: sqlite3.Connection) -> bool:
-    """True si hi ha dades amb l'esquema antic (cal migrar)."""
+    """True si hi ha dades amb un esquema anterior (cal migrar)."""
     return has_table(conn, "inventory") and get_user_version(conn) < SCHEMA_VERSION
 
 
@@ -152,12 +157,45 @@ CREATE INDEX IF NOT EXISTS idx_inventory_hash ON inventory(hash_sha256) WHERE ha
 CREATE INDEX IF NOT EXISTS idx_inventory_size ON inventory(size_bytes);
 """
 
+# v3: FTS5 trigram com a índex extern sobre inventory (content=), sincronitzat amb triggers.
+# El trigger d'UPDATE només salta si canvia name o relative_path (l'escaneig no els toca
+# en files existents; el hash tampoc), així els re-escaneigs no reindexen res.
+_DDL_V3_FTS = f"""
+CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE} USING fts5(
+    name, relative_path, content='inventory', content_rowid='id', tokenize='trigram');
+CREATE TRIGGER IF NOT EXISTS inventory_fts_ai AFTER INSERT ON inventory BEGIN
+    INSERT INTO {FTS_TABLE}(rowid, name, relative_path) VALUES (new.id, new.name, new.relative_path);
+END;
+CREATE TRIGGER IF NOT EXISTS inventory_fts_ad AFTER DELETE ON inventory BEGIN
+    INSERT INTO {FTS_TABLE}({FTS_TABLE}, rowid, name, relative_path)
+        VALUES ('delete', old.id, old.name, old.relative_path);
+END;
+CREATE TRIGGER IF NOT EXISTS inventory_fts_au AFTER UPDATE OF name, relative_path ON inventory BEGIN
+    INSERT INTO {FTS_TABLE}({FTS_TABLE}, rowid, name, relative_path)
+        VALUES ('delete', old.id, old.name, old.relative_path);
+    INSERT INTO {FTS_TABLE}(rowid, name, relative_path) VALUES (new.id, new.name, new.relative_path);
+END;
+"""
+
 
 def _exec_statements(conn: sqlite3.Connection, sql: str) -> None:
-    """Executa un bloc DDL sentència a sentència (executescript faria COMMIT implícit)."""
-    for stmt in sql.split(";"):
-        if stmt.strip():
-            conn.execute(stmt)
+    """Executa un bloc DDL sentència a sentència (executescript faria COMMIT implícit).
+
+    Els triggers contenen ';' interns: es parteix per ';' només fora de BEGIN...END.
+    """
+    buf: list[str] = []
+    depth = 0
+    for part in sql.split(";"):
+        buf.append(part)
+        upper = part.upper()
+        depth += upper.count(" BEGIN") + upper.count("\nBEGIN")
+        depth -= upper.count("END\n") + upper.count("END ") + (1 if upper.rstrip().endswith("END") else 0)
+        if depth <= 0:
+            stmt = ";".join(buf).strip()
+            buf = []
+            depth = 0
+            if stmt:
+                conn.execute(stmt)
 
 
 def _add_missing_inventory_columns(conn: sqlite3.Connection) -> list[str]:
@@ -181,23 +219,55 @@ def set_pragmas_for_writes(conn: sqlite3.Connection) -> None:
 def init_schema(conn: sqlite3.Connection) -> None:
     """Crea l'esquema complet (DB nova) o completa'l si falta alguna cosa. Idempotent.
 
-    Per a una DB antiga amb dades (user_version < 2) NO fa la conversió de dades:
-    cal executar migrate(); aquí només es creen taules/columnes/índexs que faltin.
+    Per a una DB antiga amb dades (user_version < SCHEMA_VERSION) NO fa la conversió de
+    dades: cal executar migrate(); aquí només es creen taules/columnes que faltin.
     """
-    conn.executescript(_DDL_BASE)
-    conn.executescript(_DDL_V2_TABLES)
+    _exec_statements(conn, _DDL_BASE)
+    _exec_statements(conn, _DDL_V2_TABLES)
     _add_missing_inventory_columns(conn)
     legacy = is_legacy_db(conn) and conn.execute("SELECT 1 FROM inventory LIMIT 1").fetchone()
     if not legacy:
-        # DB nova (o buida): podem crear l'índex únic i fixar la versió directament
-        conn.executescript(_DDL_V2_INDEXES)
+        # DB nova (o buida): índexs, FTS i versió directament
+        _exec_statements(conn, _DDL_V2_INDEXES)
+        _exec_statements(conn, _DDL_V3_FTS)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
 
 # ---------------------------------------------------------------------------
-# Migració de dades existents (v0/v1 -> v2)
+# Migracions
 # ---------------------------------------------------------------------------
+
+def migrate(
+    conn: sqlite3.Connection,
+    legacy_roots: dict[str, str] | None = None,
+    legacy_dates: dict[str, str] | None = None,
+    log: Callable[[str], None] = print,
+) -> bool:
+    """Porta la DB a SCHEMA_VERSION pas a pas. Retorna True si s'ha fet alguna migració.
+
+    legacy_roots: drive_id -> arrel usada a l'escaneig antic (p. ex. 'F:\\\\'). Si falta,
+                  es dedueix de folder_stats. legacy_dates: drive_id -> data ISO (opcional).
+    """
+    version = get_user_version(conn)
+    if version >= SCHEMA_VERSION:
+        log(f"La DB ja és a la versió {version}; res a fer.")
+        return False
+    if not has_table(conn, "inventory"):
+        init_schema(conn)
+        log("DB buida: esquema creat directament a la versió actual.")
+        return True
+    conn.execute("PRAGMA foreign_keys = OFF")
+    if version < 2:
+        _migrate_to_v2(conn, dict(legacy_roots or {}), dict(legacy_dates or {}), log)
+    if get_user_version(conn) < 3:
+        _migrate_to_v3(conn, log)
+    log("  ANALYZE…")
+    conn.execute("ANALYZE")
+    conn.commit()
+    log(f"Migració completada (versió {get_user_version(conn)}).")
+    return True
+
 
 def _legacy_root_from_folder_stats(conn: sqlite3.Connection, drive_id: str) -> str | None:
     """Dedueix l'arrel de l'escaneig antic: fila de profunditat 0 o prefix d'unitat."""
@@ -215,57 +285,33 @@ def _legacy_root_from_folder_stats(conn: sqlite3.Connection, drive_id: str) -> s
     return None
 
 
-def migrate(
+def _migrate_to_v2(
     conn: sqlite3.Connection,
-    legacy_roots: dict[str, str] | None = None,
-    legacy_dates: dict[str, str] | None = None,
-    log: Callable[[str], None] = print,
-) -> bool:
-    """Porta la DB a SCHEMA_VERSION. Retorna True si s'ha fet alguna migració.
-
-    legacy_roots: drive_id -> arrel usada a l'escaneig antic (p. ex. 'F:\\\\'). Si falta,
-                  es dedueix de folder_stats.
-    legacy_dates: drive_id -> data ISO de l'escaneig antic (opcional).
-    """
-    version = get_user_version(conn)
-    if version >= SCHEMA_VERSION:
-        log(f"La DB ja és a la versió {version}; res a fer.")
-        return False
-    if not has_table(conn, "inventory"):
-        init_schema(conn)
-        log("DB buida: esquema creat directament a la versió actual.")
-        return True
-
-    legacy_roots = dict(legacy_roots or {})
-    legacy_dates = dict(legacy_dates or {})
+    legacy_roots: dict[str, str],
+    legacy_dates: dict[str, str],
+    log: Callable[[str], None],
+) -> None:
     now = utc_now_iso()
-
-    log(f"Migrant de la versió {version} a la {SCHEMA_VERSION}…")
-    conn.execute("PRAGMA foreign_keys = OFF")
+    log("Migrant a la versió 2 (drives, scans, hash, seguiment)…")
     conn.execute("BEGIN")
     try:
-        # 1) Taules i columnes noves
         _exec_statements(conn, _DDL_BASE)  # per si falta algun índex antic
         _exec_statements(conn, _DDL_V2_TABLES)
         added = _add_missing_inventory_columns(conn)
         log(f"  columnes afegides a inventory: {', '.join(added) or '(cap)'}")
 
-        # 2) Normalitzar extensió buida
         n = conn.execute(
             "UPDATE inventory SET extension = ? WHERE extension = ''", (NO_EXT,)
         ).rowcount
         log(f"  extensions buides -> {NO_EXT}: {n} fitxers")
-        # by_extension: fusionar '' amb '(no_ext)' si existeixen ambdues
         conn.execute(
             """
             INSERT INTO by_extension (drive_id, extension, count, total_bytes)
             SELECT drive_id, ?, SUM(count), SUM(total_bytes)
             FROM by_extension WHERE extension IN ('', ?) GROUP BY drive_id
-            HAVING COUNT(*) > 0
             """,
             (NO_EXT, NO_EXT),
         )
-        # esborrar les files originals ('' i '(no_ext)' antigues), deixant la fusionada (id més alt)
         conn.execute(
             """
             DELETE FROM by_extension WHERE extension IN ('', ?) AND id NOT IN (
@@ -274,11 +320,9 @@ def migrate(
             (NO_EXT, NO_EXT),
         )
 
-        # 3) Índexs nous (l'únic falla si hi ha duplicats: millor saber-ho ara)
         _exec_statements(conn, _DDL_V2_INDEXES)
         log("  índexs creats (únic drive_id+relative_path, hash, mida)")
 
-        # 4) drives + scans històrics + folder_path relatiu + seguiment a inventory
         drive_ids = [r[0] for r in conn.execute("SELECT DISTINCT drive_id FROM inventory ORDER BY 1")]
         for d in drive_ids:
             root = legacy_roots.get(d) or _legacy_root_from_folder_stats(conn, d) or ""
@@ -296,8 +340,6 @@ def migrate(
                 (d, root, when, when),
             )
             scan_id = cur.lastrowid
-
-            # folder_path absolut -> relatiu a l'arrel ('' per a l'arrel mateixa)
             if root:
                 root_clean = root.rstrip("\\/")
                 prefix = root_clean + "\\"
@@ -313,7 +355,6 @@ def migrate(
                     """,
                     (root_clean, len(prefix), prefix, len(prefix) + 1, d),
                 )
-
             conn.execute(
                 "UPDATE inventory SET first_seen_scan = ?, last_seen_scan = ? WHERE drive_id = ?",
                 (scan_id, scan_id, d),
@@ -321,17 +362,25 @@ def migrate(
             refresh_drive_counters(conn, d, root_path=root, scan_utc=when)
             log(f"  {d}: arrel antiga «{root or '?'}», scan #{scan_id}")
 
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.execute("PRAGMA user_version = 2")
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
         raise
 
-    log("  ANALYZE…")
-    conn.execute("ANALYZE")
-    conn.commit()
-    log("Migració completada.")
-    return True
+
+def _migrate_to_v3(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 3 (índex de text FTS5 trigram)… pot tardar uns minuts")
+    conn.execute("BEGIN")
+    try:
+        _exec_statements(conn, _DDL_V3_FTS)
+        conn.execute(f"INSERT INTO {FTS_TABLE}({FTS_TABLE}) VALUES ('rebuild')")
+        conn.execute("PRAGMA user_version = 3")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log("  índex FTS construït")
 
 
 def refresh_drive_counters(

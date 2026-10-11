@@ -1,5 +1,4 @@
 """GET/POST /discs — Gestió de discs: escanejar i incorporar, actualitzar o eliminar."""
-import asyncio
 import html
 import logging
 import re
@@ -11,8 +10,8 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app import queries, schema
-from app.audit_to_db import delete_drive, scan_drive
+from app import queries, scan_jobs, schema
+from app.audit_to_db import delete_drive
 from app.config import database_path
 
 # Longitud màxima del missatge d'error mostrat a la plantilla (evitar HTML massa llarg)
@@ -61,18 +60,9 @@ def discs_page_get(
             "scans": scans,
             "msg_ok": msg_ok,
             "msg_error": msg_error,
+            "job": scan_jobs.get_status(),
         },
     )
-
-
-def _run_scan_in_thread(db_path: Path, root_path: Path, drive_id: str, mode: str):
-    """Executa l'escaneig en un thread; la connexió es crea i es tanca aquí."""
-    conn = sqlite3.connect(str(db_path), timeout=60.0)
-    try:
-        # «Reiniciar» també accepta un volum amb serial diferent (disc reformatat o nou)
-        return scan_drive(conn, root_path, drive_id, mode=mode, force_volume=(mode == "replace"))
-    finally:
-        conn.close()
 
 
 def _error_html_response(message: str) -> HTMLResponse:
@@ -111,8 +101,9 @@ async def discs_page_post(request: Request, templates: Jinja2Templates) -> HTMLR
             )
 
         database_path.parent.mkdir(parents=True, exist_ok=True)
-        result = await asyncio.to_thread(_run_scan_in_thread, database_path, root_path, drive_id, mode)
-        return RedirectResponse(url=f"/discs?ok={quote(result.message())}", status_code=302)
+        # L'escaneig s'executa en segon pla; la pàgina Discs mostra el progrés (/api/scan/status)
+        scan_jobs.start_scan(database_path, root_path, drive_id, mode)
+        return RedirectResponse(url="/discs", status_code=302)
     except Exception as e:
         logging.exception("Error en POST /discs (escaneig)")
         return _error_html_response(_sanitize_error_message(str(e)))

@@ -170,6 +170,16 @@ async def discs_post(request: Request):
         )
 
 
+@app.get("/api/scan/status")
+def api_scan_status():
+    """Estat de l'escaneig en segon pla llançat des de Discs (o null si no n'hi ha hagut cap)."""
+    from app import scan_jobs
+    st = scan_jobs.get_status()
+    if st:
+        st.pop("started_ts", None)
+    return {"job": st}
+
+
 @app.post("/discs/delete", name="discs_delete")
 async def discs_delete(request: Request):
     return await discs.discs_delete_post(request)

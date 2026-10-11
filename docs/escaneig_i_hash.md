@@ -16,6 +16,8 @@ layout: default
 
 Els fitxers sense extensió tenen `extension = '(no_ext)'`.
 
+**Versió 3: índex de text.** `inventory_fts` és un índex FTS5 amb tokenitzador *trigram* sobre nom i ruta, mantingut per triggers. La cerca de fitxers l'usa per podar candidats i després aplica el filtre exacte de sempre, així que els resultats són els mateixos però en mil·lisegons en lloc de segons. Fa créixer la DB (uns 2 GB per a 4,8 M de fitxers) i la construcció inicial tarda uns dos minuts. Fragments de menys de 3 caràcters no es poden indexar i cauen al camí lent.
+
 ### Migrar una base de dades antiga
 
 Una DB creada amb versions anteriors (sense `drives` ni hashes) s'ha de migrar un sol cop. L'app ho detecta i ho avisa (error 503 amb la instrucció). Treballa sobre una còpia si vols conservar l'original:
@@ -26,11 +28,11 @@ python -m app.migrate
 python -m app.migrate --db data\arxiu_discs.db --legacy-audits C:\ruta\AUDIT_HHDD
 ```
 
-Amb 4,8 milions de fitxers tarda mig minut. La DB creix (índexs nous) i passa a mode WAL.
+Amb 4,8 milions de fitxers tarda mig minut (versió 2) més uns dos minuts per l'índex de text (versió 3). La DB creix (índexs nous) i passa a mode WAL.
 
 ## Escanejar un disc
 
-Des de **Discs** (o programàticament amb `app.audit_to_db.scan_drive`). Dos modes:
+Des de **Discs** (o programàticament amb `app.audit_to_db.scan_drive`). A la web l'escaneig s'executa en segon pla i la pàgina mostra el progrés (fitxers recorreguts i carpeta actual); es pot tancar la pàgina i tornar-hi. Només pot haver-hi un escaneig en curs a la vegada. Dos modes:
 
 - **Actualitzar** (per defecte, botó *Actualitzar* o formulari sense la casella marcada). Es recorre tot el disc i es fusiona amb el que hi ha:
   - fitxers nous → s'afegeixen;

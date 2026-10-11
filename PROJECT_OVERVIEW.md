@@ -38,7 +38,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 ## Base de dades
 
 - **Ruta:** `app/config.py` — per defecte `PROJECT_ROOT / "data" / "arxiu_discs.db"`; override amb variable d’entorn `DATABASE_PATH`.
-- **Esquema versió 2** (`PRAGMA user_version = 2`, definit a `app/schema.py`):
+- **Esquema versió 3** (`PRAGMA user_version = 3`, definit a `app/schema.py`; la v3 afegeix `inventory_fts`, FTS5 trigram sobre name i relative_path amb triggers de sincronització):
 
   - **drives**: drive_id (PK), label, kind, interface, vendor, model, serial_number, volume_serial, filesystem, capacity_bytes, location, status, notes, files_count, total_bytes, hashed_files, hashed_bytes, last_root_path, last_scan_utc, created_utc, updated_utc.
   - **scans**: scan_id, drive_id, root_path, mode (update/replace), started_utc, finished_utc, status (running/done/aborted), files_count, total_bytes, files_new, files_changed, files_missing, tool_version, notes.
@@ -77,6 +77,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/schema.py:** `SCHEMA_VERSION`, `init_schema`, `migrate` (v0/v1 → v2), `refresh_drive_counters`, pragmes per a escriptures massives.
 - **app/audit_to_db.py:** `scan_drive` (escaneig amb fusió update/replace), `delete_drive`, `import_from_csv_folder`, `audit_direct_to_db` (compatibilitat).
 - **app/migrate.py:** CLI de migració (`python -m app.migrate [--db] [--legacy-audits]`).
+- **app/scan_jobs.py:** escaneig en segon pla llançat des de Discs (un a la vegada), estat consultable a `/api/scan/status`.
 - **app/volume_info.py:** etiqueta, sistema de fitxers, serial i capacitat del volum (Windows via ctypes).
 - **tools/hash_files.py:** CLI de hash SHA-256 incremental per disc.
 - **app/routes/explorer.py:** Pàgina Explorador (GET /explorador; requereix DB).

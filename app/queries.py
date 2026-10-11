@@ -66,6 +66,44 @@ def get_top_folders(conn: sqlite3.Connection, limit: int = 30) -> list[dict[str,
 SEARCH_SCOPE_VALUES = ("name", "path", "both")
 
 
+_FTS_SPLIT_CHARS = "*?%_\""
+_FTS_MIN_FRAGMENT = 3  # el tokenitzador trigram no pot indexar fragments més curts
+
+
+def _fts_fragments(term: str) -> list[str]:
+    """Fragments literals d'un terme d'usuari (sense comodins) utilitzables al MATCH trigram."""
+    out: list[str] = []
+    cur = ""
+    for ch in term:
+        if ch in _FTS_SPLIT_CHARS:
+            if len(cur) >= _FTS_MIN_FRAGMENT:
+                out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if len(cur) >= _FTS_MIN_FRAGMENT:
+        out.append(cur)
+    return out
+
+
+def build_fts_match(
+    name_terms: list[str], path_terms: list[str], flex_terms: list[str]
+) -> str | None:
+    """Expressió MATCH per a inventory_fts que poda candidats sense canviar la semàntica.
+
+    Cada fragment és una frase (subcadena, trigram); nom i ruta van qualificats per columna,
+    els termes «flex» (nom o ruta) sense qualificar. El LIKE posterior fa el filtre exacte,
+    així que l'expressió només ha de ser un superconjunt. None si no hi ha cap fragment útil.
+    """
+    parts: list[str] = []
+    for col, terms in (("name", name_terms), ("relative_path", path_terms), (None, flex_terms)):
+        for t in terms:
+            for frag in _fts_fragments(t):
+                phrase = '"' + frag.replace('"', '""') + '"'
+                parts.append(f"{col}:{phrase}" if col else phrase)
+    return " AND ".join(parts) if parts else None
+
+
 def _search_term_to_like_pattern(term: str) -> str:
     """Patró LIKE per coincidència parcial: * -> % (qualsevol seqüència), ? -> _ (un caràcter)."""
     return f"%{term.replace('*', '%').replace('?', '_')}%"
@@ -80,6 +118,7 @@ def _build_search_inventory_where(
     exclude_terms: list[str],
     extensions: list[str] | None = None,
     include_missing: bool = False,
+    fts_match: str | None = None,
 ) -> tuple[str, list]:
     """Construïx WHERE per search_inventory.
     - flex_like_terms: cada terme (name OR relative_path), tots amb AND (mode «nom o ruta»).
@@ -105,6 +144,10 @@ def _build_search_inventory_where(
         main_parts.append("1 = 0")
 
     conditions = [" AND ".join(main_parts)]
+    if fts_match:
+        # poda per índex FTS5 (trigram): el LIKE de dalt continua fent el filtre exacte
+        conditions.insert(0, "id IN (SELECT rowid FROM inventory_fts WHERE inventory_fts MATCH ?)")
+        params.insert(0, fts_match)
     if not include_missing:
         conditions.append("missing_since_utc IS NULL")
     if drive_ids:
@@ -162,6 +205,7 @@ def search_inventory(
             return [], 0
         like_name = [_search_term_to_like_pattern(t) for t in name_terms]
         like_path = [_search_term_to_like_pattern(t) for t in path_terms]
+    fts_match = build_fts_match(name_terms, path_terms, flex_terms)
 
     where, params = _build_search_inventory_where(
         drive_ids,
@@ -172,6 +216,7 @@ def search_inventory(
         exclude_terms,
         extensions,
         include_missing,
+        fts_match,
     )
     params_count = list(params)
     if sort_by and sort_by in SEARCH_INVENTORY_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):

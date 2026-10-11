@@ -297,7 +297,6 @@ def scan_drive(
             conn.execute(
                 """
                 UPDATE inventory SET
-                    name = s.name, extension = s.extension,
                     hash_sha256 = CASE WHEN inventory.size_bytes = s.size_bytes
                                         AND substr(inventory.modified_utc, 1, 19) IS substr(s.modified_utc, 1, 19)
                                        THEN inventory.hash_sha256 END,

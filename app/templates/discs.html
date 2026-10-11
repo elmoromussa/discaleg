@@ -10,6 +10,21 @@
 <p class="msg-error" role="alert">{{ msg_error }}</p>
 {% endif %}
 
+{% if job %}
+<section id="scan-job" class="card" aria-live="polite" data-status="{{ job.status }}">
+  <h2>Escaneig {% if job.status == "running" %}en curs{% elif job.status == "done" %}acabat{% else %}amb error{% endif %}</h2>
+  <p><strong>{{ job.drive_id }}</strong> des de <code>{{ job.root_path }}</code> (mode {{ job.mode }}), iniciat {{ (job.started_utc or '')[:19] }}</p>
+  {% if job.status == "running" %}
+  <p id="scan-job-progress"><span id="scan-job-files">{{ job.files_seen }}</span> fitxers recorreguts · <span id="scan-job-phase">{{ job.phase }}</span> · <span id="scan-job-dir" class="mono">{{ job.current_dir }}</span></p>
+  <p class="form-hint">Podeu tancar aquesta pàgina: l'escaneig continua al servidor. En acabar el recorregut, la fusió amb la base de dades pot trigar un o dos minuts més sense que el comptador canvii.</p>
+  {% elif job.status == "done" %}
+  <p class="msg-ok">{{ job.message }}</p>
+  {% else %}
+  <p class="msg-error">{{ job.error }}</p>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if not drives %}
 <p class="page-description">Encara no hi ha base de dades (o cap disc importat). Auditeu un disc o una carpeta per crear-la i incorporar-lo.</p>
 {% endif %}
@@ -129,6 +144,28 @@
 </div>
 
 <script>
+(function () {
+  // Progrés de l'escaneig en segon pla
+  var jobEl = document.getElementById('scan-job');
+  if (jobEl && jobEl.getAttribute('data-status') === 'running') {
+    var filesEl = document.getElementById('scan-job-files');
+    var dirEl = document.getElementById('scan-job-dir');
+    var phaseEl = document.getElementById('scan-job-phase');
+    var poll = function () {
+      fetch('/api/scan/status').then(function (r) { return r.json(); }).then(function (data) {
+        var j = data.job;
+        if (!j) return;
+        if (j.status !== 'running') { window.location.href = '/discs'; return; }
+        if (filesEl) filesEl.textContent = (j.files_seen || 0).toLocaleString('ca');
+        if (dirEl) dirEl.textContent = j.current_dir || '';
+        if (phaseEl) phaseEl.textContent = j.phase || '';
+        setTimeout(poll, 2000);
+      }).catch(function () { setTimeout(poll, 5000); });
+    };
+    setTimeout(poll, 2000);
+    document.querySelectorAll('form.discs-form button[type="submit"], .btn-update').forEach(function (b) { b.disabled = true; });
+  }
+})();
 (function () {
   var input = document.getElementById('root_path');
   var btnOpen = document.getElementById('btn_select_drive');
