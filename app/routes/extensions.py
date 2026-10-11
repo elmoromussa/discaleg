@@ -63,8 +63,7 @@ def extensions_page(
 
     sort_urls = {col: _sort_url(col) for col in queries.EXTENSIONS_LIST_SORT_COLUMNS}
 
-    return templates.TemplateResponse(
-        "extensions.html",
+    return templates.TemplateResponse(request, "extensions.html",
         {
             "request": request,
             "submitted": submitted,

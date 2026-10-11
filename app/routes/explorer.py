@@ -11,7 +11,6 @@ def explorer_page(
     templates: Jinja2Templates,
     conn: sqlite3.Connection,
 ) -> HTMLResponse:
-    return templates.TemplateResponse(
-        "explorador.html",
+    return templates.TemplateResponse(request, "explorador.html",
         {"request": request},
     )

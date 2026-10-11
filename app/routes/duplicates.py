@@ -234,8 +234,7 @@ def duplicates_page(
     }
     sort_labels_duplicates = {col: SORT_LABELS.get(col, col) for col in dup_sort_columns}
 
-    return templates.TemplateResponse(
-        "duplicates.html",
+    return templates.TemplateResponse(request, "duplicates.html",
         {
             "request": request,
             "type": type_,

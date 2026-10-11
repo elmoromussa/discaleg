@@ -63,8 +63,7 @@ def folders_page(
 
     sort_urls = {col: _sort_url(col) for col in queries.FOLDERS_LIST_SORT_COLUMNS}
 
-    return templates.TemplateResponse(
-        "folders.html",
+    return templates.TemplateResponse(request, "folders.html",
         {
             "request": request,
             "submitted": submitted,

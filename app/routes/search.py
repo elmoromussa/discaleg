@@ -254,8 +254,7 @@ def search_page(
     sort_urls_files = {col: _sort_url_files(col) for col in FILES_SORT_COLUMNS}
     sort_urls_folders = {col: _sort_url_folders(col) for col in FOLDERS_SORT_COLUMNS}
 
-    return templates.TemplateResponse(
-        "search.html",
+    return templates.TemplateResponse(request, "search.html",
         {
             "request": request,
             "q": q,

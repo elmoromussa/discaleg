@@ -16,8 +16,7 @@ def dashboard(
     drives = queries.get_drives_summary(conn)
     top_ext = queries.get_top_extensions(conn, limit=20)
     top_folders = queries.get_top_folders(conn, limit=30)
-    return templates.TemplateResponse(
-        "dashboard.html",
+    return templates.TemplateResponse(request, "dashboard.html",
         {
             "request": request,
             "drives": drives,

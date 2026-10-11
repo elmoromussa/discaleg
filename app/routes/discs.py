@@ -54,8 +54,7 @@ def discs_page_get(
         except Exception as e:
             logging.exception("Error llegint la llista de discs")
             msg_error = msg_error or _sanitize_error_message(str(e))
-    return templates.TemplateResponse(
-        "discs.html",
+    return templates.TemplateResponse(request, "discs.html",
         {
             "request": request,
             "drives": drives,

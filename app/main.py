@@ -55,7 +55,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 @app.get("/")
 def index(request: Request):
     if not database_path.is_file():
-        return templates.TemplateResponse("welcome.html", {"request": request})
+        return templates.TemplateResponse(request, "welcome.html", {"request": request})
     conn = sqlite3.connect(str(database_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     try:
