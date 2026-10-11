@@ -48,7 +48,8 @@ Cada escaneig registra el serial del volum a `drives.volume_serial`. Si en un es
 Per a discs grans és més còmode veure el progrés al terminal:
 
 ```bash
-python tools/scan_drive.py --drive EXT-A --root F:\npython tools/scan_drive.py --drive NOU-1 --root G:\ --kind hdd --label "Toshiba 4TB"
+python tools/scan_drive.py --drive EXT-A --root F:\
+python tools/scan_drive.py --drive NOU-1 --root G:\ --kind hdd --label "Toshiba 4TB"
 python tools/scan_drive.py --drive EXT-A --replace      # reinicia (perd hashes)
 ```
 
