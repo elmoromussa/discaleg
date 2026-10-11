@@ -21,6 +21,7 @@ layout: default
 | [Instal·lació](instalacio.html) | Requisits, entorn virtual, dependències |
 | [Configuració](configuracio.html) | Ruta de la base de dades, variable d'entorn |
 | [Ús i flux de treball](usage.html) | Auditar discs, cercar, duplicats, explorador |
+| [Escaneig, actualització i hash](escaneig_i_hash.html) | Esquema v2, migració, modes d'escaneig, càlcul de SHA-256 incremental |
 
 ## Enllaços
 

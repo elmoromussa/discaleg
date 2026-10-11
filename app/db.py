@@ -4,6 +4,7 @@ from collections.abc import Generator
 
 from fastapi import Depends, HTTPException
 
+from app import schema
 from app.config import database_path
 
 
@@ -17,6 +18,14 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
     conn = sqlite3.connect(str(database_path), timeout=10.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
+        if schema.is_legacy_db(conn):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"La base de dades té l'esquema antic (versió {schema.get_user_version(conn)}). "
+                    f"Executa:  python -m app.migrate"
+                ),
+            )
         yield conn
     finally:
         conn.close()

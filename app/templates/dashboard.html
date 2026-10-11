@@ -17,7 +17,8 @@
   <div class="stat">
     <strong><span class="section-icon" aria-hidden="true">&#x1F4BE;</span>{{ d.drive_id }}</strong>
     <span>{{ d.files | default(0) | int }} fitxers</span><br>
-    <span class="bytes">{{ d.total_bytes | default(0) | int | format_bytes }}</span>
+    <span class="bytes">{{ d.total_bytes | default(0) | int | format_bytes }}</span><br>
+    <span title="Fitxers amb SHA-256 calculat">Hash: {{ '%.1f' | format(d.hashed_pct | default(0)) }} %</span>
   </div>
   {% endfor %}
 </div>

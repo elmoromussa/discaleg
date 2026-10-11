@@ -37,8 +37,9 @@
     <div class="form-group">
       <label class="checkbox-label">
         <input type="checkbox" name="replace" value="on">
-        Substituir dades d'aquest disc (actualitzar)
+        Reiniciar el disc (esborra l'inventari i els hashes d'aquest drive_id)
       </label>
+      <p class="form-hint">Per defecte s'<strong>actualitza</strong>: els fitxers nous s'afegeixen, els modificats s'actualitzen, els desapareguts es marquen, i els hashes dels fitxers no modificats es conserven.</p>
     </div>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">Auditar i incorporar</button>
@@ -53,8 +54,11 @@
     {% for d in drives %}
     <div class="stat stat-disc">
       <strong>{{ d.drive_id }}</strong>
+      {% if d.label %}<span class="mono">{{ d.label }}</span><br>{% endif %}
       <span>{{ d.files | default(0) | int }} fitxers</span><br>
-      <span class="bytes">{{ d.total_bytes | default(0) | int | format_bytes }}</span>
+      <span class="bytes">{{ d.total_bytes | default(0) | int | format_bytes }}</span><br>
+      <span title="Fitxers amb SHA-256 calculat">Hash: {{ '%.1f' | format(d.hashed_pct | default(0)) }} %</span><br>
+      <span title="{{ d.last_root_path or '' }}">Escaneig: {{ (d.last_scan_utc or '—')[:10] }}</span>
       <div class="stat-disc-actions">
         <button type="button" class="btn btn-update" data-drive-id="{{ d.drive_id }}" aria-label="Actualitzar unitat {{ d.drive_id }}">Actualitzar</button>
         <form method="post" action="{{ request.url_for('discs_delete') }}" class="stat-disc-delete-form" onsubmit="return confirm('Eliminar la unitat de la base de dades? Aquesta acció no es pot desfer.');">
@@ -66,10 +70,38 @@
     {% endfor %}
   </div>
 </section>
+{% if scans %}
+<section class="scans-list" aria-label="Últims escaneigs">
+  <h2>Últims escaneigs</h2>
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr><th>#</th><th>Disc</th><th>Arrel</th><th>Mode</th><th>Inici</th><th>Estat</th><th>Fitxers</th><th>Mida</th><th>Nous</th><th>Modificats</th><th>Desapareguts</th></tr>
+      </thead>
+      <tbody>
+        {% for s in scans %}
+        <tr>
+          <td>{{ s.scan_id }}</td>
+          <td>{{ s.drive_id }}</td>
+          <td class="mono">{{ s.root_path }}</td>
+          <td>{{ s.mode }}</td>
+          <td>{{ (s.started_utc or '')[:16] }}</td>
+          <td>{{ s.status }}</td>
+          <td>{{ s.files_count | default(0, true) | int }}</td>
+          <td class="bytes">{{ s.total_bytes | default(0, true) | int | format_bytes }}</td>
+          <td>{{ s.files_new if s.files_new is not none else '—' }}</td>
+          <td>{{ s.files_changed if s.files_changed is not none else '—' }}</td>
+          <td>{{ s.files_missing if s.files_missing is not none else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
 <!-- Formulari ocult per actualitzar: s'omple el root_path des del modal i s'envia -->
 <form id="form_update_disc" method="post" action="{{ request.url_for('discs_post') }}" style="display: none;">
   <input type="hidden" name="drive_id" id="update_drive_id">
-  <input type="hidden" name="replace" value="on">
   <input type="hidden" name="root_path" id="update_root_path">
 </form>
 {% endif %}

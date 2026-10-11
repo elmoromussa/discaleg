@@ -24,11 +24,24 @@ def _extension_match_values(extensions: list[str]) -> list[str]:
 
 
 def get_drives_summary(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Total fitxers i bytes per disc (des de by_extension)."""
+    """Fitxa i comptadors per disc (taula drives; fitxers presents, cobertura de hash, últim escaneig)."""
     cur = conn.execute("""
-        SELECT drive_id, SUM(count) AS files, SUM(total_bytes) AS total_bytes
-        FROM by_extension GROUP BY drive_id ORDER BY drive_id
+        SELECT drive_id, label, kind, filesystem, volume_serial, capacity_bytes, status, notes,
+               files_count AS files, total_bytes, hashed_files, hashed_bytes,
+               last_root_path, last_scan_utc,
+               CASE WHEN files_count > 0 THEN 100.0 * hashed_files / files_count ELSE 0 END AS hashed_pct
+        FROM drives ORDER BY drive_id
     """)
+    return [dict(row) for row in cur.fetchall()]
+
+
+def get_recent_scans(conn: sqlite3.Connection, limit: int = 10) -> list[dict[str, Any]]:
+    """Últims escaneigs registrats (taula scans)."""
+    cur = conn.execute("""
+        SELECT scan_id, drive_id, root_path, mode, started_utc, finished_utc, status,
+               files_count, total_bytes, files_new, files_changed, files_missing
+        FROM scans ORDER BY scan_id DESC LIMIT ?
+    """, (limit,))
     return [dict(row) for row in cur.fetchall()]
 
 

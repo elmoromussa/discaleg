@@ -22,17 +22,21 @@ En discs molt grans (p. ex. 5–8 TB amb molts fitxers), el procés pot dur dive
 
 ### Actualitzar un disc existent
 
-1. Marca **Substituir dades d'aquest disc**.
-2. Indica el **mateix identificador** (*drive_id*) que vas fer servir abans.
-3. Indica la nova ruta (o la mateixa si has tornat a auditar).
-4. Enviar. Les dades antigues d'aquest disc es substitueixen.
+1. A la llista de discs, prem **Actualitzar** i tria la unitat o carpeta on està muntat (o usa el formulari amb el mateix *drive_id*).
+2. Enviar. Els fitxers nous s'afegeixen, els modificats s'actualitzen, els desapareguts es marquen i els hashes dels fitxers no modificats es conserven.
+
+Si marques **Reiniciar el disc**, l'inventari d'aquest *drive_id* s'esborra i es torna a crear (es perden els hashes).
+
+### Hashes i verificació
+
+El càlcul del SHA-256 per fitxer es fa amb `python tools/hash_files.py` (vegeu [Escaneig, actualització i hash](escaneig_i_hash.html)). És incremental: es pot aturar i reprendre, i la pàgina **Discs** mostra el percentatge de fitxers amb hash per disc.
 
 ## Rutes principals
 
 | Ruta | Descripció |
 |------|-------------|
 | **Inici** | Si hi ha DB: resum per disc, top extensions, top carpetes. Si no: benvinguda. |
-| **Cercar** | Cerca per paraula clau (nom o ruta); filtre opcional per disc. |
+| **Cercar** | Cerca per fragments de nom i/o de ruta (tots han de coincidir), o cerca clàssica d'un sol camp; comodins `*` i `?`; filtre per disc i extensió. |
 | **Duplicats** | Fitxers amb el mateix nom, o nom + mida, en més d'un disc. |
 | **Extensions** | Estadístiques per extensió (paginat). |
 | **Carpetes** | Llistat de carpetes per mida (paginat). |

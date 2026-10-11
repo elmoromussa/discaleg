@@ -38,18 +38,21 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 ## Base de dades
 
 - **Ruta:** `app/config.py` — per defecte `PROJECT_ROOT / "data" / "arxiu_discs.db"`; override amb variable d’entorn `DATABASE_PATH`.
-- **Esquema** (taules llegides/escrites per l’app):
+- **Esquema versió 2** (`PRAGMA user_version = 2`, definit a `app/schema.py`):
 
-  - **inventory**: id, drive_id, relative_path, name, extension, size_bytes, modified_utc. Índexs: drive_id, (drive_id, extension), name.
-  - **folder_stats**: id, drive_id, folder_path, folder_name, folder_depth, files_count, total_bytes. Índexs: drive_id, folder_name.
+  - **drives**: drive_id (PK), label, kind, interface, vendor, model, serial_number, volume_serial, filesystem, capacity_bytes, location, status, notes, files_count, total_bytes, hashed_files, hashed_bytes, last_root_path, last_scan_utc, created_utc, updated_utc.
+  - **scans**: scan_id, drive_id, root_path, mode (update/replace), started_utc, finished_utc, status (running/done/aborted), files_count, total_bytes, files_new, files_changed, files_missing, tool_version, notes.
+  - **inventory**: id, drive_id, relative_path, name, extension (`(no_ext)` si no en té), size_bytes, modified_utc, hash_sha256, hashed_utc, hash_size_bytes, hash_mtime_utc, first_seen_scan, last_seen_scan, missing_since_utc. Índexs: drive_id, (drive_id, extension), name, **únic (drive_id, relative_path)**, hash_sha256 (parcial), size_bytes.
+  - **folder_stats**: id, drive_id, folder_path (relatiu a l'arrel; `''` = arrel), folder_name, folder_depth, files_count, total_bytes. Índexs: drive_id, folder_name.
   - **by_extension**: id, drive_id, extension, count, total_bytes. Índex: drive_id.
 
-- **Creació/actualització:** via `app/audit_to_db.py`: `init_schema(conn)` i `audit_direct_to_db(conn, root_path, drive_id, replace)`. Flux principal: auditar una carpeta arrel i escriure directament a la DB (un disc cada vegada, sense CSV intermedis). Opcional: import des de carpeta d’audit existent (CSV).
+- **Creació/actualització:** `app/schema.py` (`init_schema`, `migrate`), `app/audit_to_db.py` (`scan_drive(conn, root, drive_id, mode)`), `python -m app.migrate` per a DB antigues, `tools/hash_files.py` per als hashes. Mode WAL per poder consultar mentre s'escriu.
 
 ## Flux de dades
 
-- **Històric:** Els scripts de temp generaven CSV (quick_audit_archive) i després s’importaven a la DB (import_audit_to_db). En el projecte integrat, el flux és **auditar i escriure directament a la DB** des de la pàgina “Discs”.
-- **Discs grans (5–8 TB, molts fitxers):** L’audit directe usa memòria fitada: `os.walk` + buffer de N fitxers (chunk), `executemany` a `inventory`, i diccionaris per `folder_stats` i `by_extension` (inserits en batch al final). Una sola transacció per disc.
+- **Històric:** Els scripts de `tools/` generaven CSV (quick_audit_archive) i després s’importaven a la DB (import_audit_to_db). Aquests escaneigs del març de 2026 consten a `scans` com a `legacy-csv-import`.
+- **Escaneig (scan_drive):** `os.scandir` iteratiu (sense seguir enllaços ni junctions) → taula temporal `scan_files` en chunks de 20.000 → fusió en SQL per conjunts dins d'una transacció: absents → `missing_since_utc`; existents → actualitzar metadades conservant el hash si mida i data no han canviat; nous → inserir. `folder_stats` i `by_extension` es recalculen per al disc. El registre a `scans` es crea abans (estat `running`) i es tanca al final (`done`/`aborted`).
+- **Hash (tools/hash_files.py):** procés a part, per disc, només files amb `hash_sha256 IS NULL`, ordre per ruta, lots amb commit, Ctrl+C segur, `--max-minutes`, `--only-size-dupes`, `--workers`. Comprova el serial del volum contra `drives.volume_serial`.
 
 ## Rutes
 
@@ -68,10 +71,14 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 
 - **app/main.py:** App FastAPI, muntatge de rutes i plantilles, filtre `format_bytes`.
 - **app/config.py:** `database_path` (DATABASE_PATH o default).
-- **app/db.py:** `get_db()` — obre SQLite; si el fitxer no existeix, retorna 503.
+- **app/db.py:** `get_db()` — obre SQLite; si el fitxer no existeix o l'esquema és antic (cal `python -m app.migrate`), retorna 503.
 - **app/queries.py:** Totes les consultes de lectura (dashboard, cerca, duplicats, extensions, folders, get_drive_ids, etc.).
 - **app/queries_explorer.py:** Consultes per a l'explorador (get_explorer_drive_ids, get_explorer_children, get_explorer_contents); deriva l'arbre des de `inventory.relative_path`.
-- **app/audit_to_db.py:** `init_schema`, `audit_direct_to_db` (walk + inserció en chunks), opcional `import_from_csv_folder`.
+- **app/schema.py:** `SCHEMA_VERSION`, `init_schema`, `migrate` (v0/v1 → v2), `refresh_drive_counters`, pragmes per a escriptures massives.
+- **app/audit_to_db.py:** `scan_drive` (escaneig amb fusió update/replace), `delete_drive`, `import_from_csv_folder`, `audit_direct_to_db` (compatibilitat).
+- **app/migrate.py:** CLI de migració (`python -m app.migrate [--db] [--legacy-audits]`).
+- **app/volume_info.py:** etiqueta, sistema de fitxers, serial i capacitat del volum (Windows via ctypes).
+- **tools/hash_files.py:** CLI de hash SHA-256 incremental per disc.
 - **app/routes/explorer.py:** Pàgina Explorador (GET /explorador; requereix DB).
 - **app/routes/discs.py:** Pàgina Discs (GET sense DB opcional per llista; POST audit directe o import CSV).
 
