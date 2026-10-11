@@ -114,7 +114,6 @@ def print_status(conn: sqlite3.Connection) -> None:
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    global _stop
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", type=Path, default=database_path)
     ap.add_argument("--drive", help="drive_id a processar")
