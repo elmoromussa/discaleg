@@ -5,6 +5,9 @@
 <p class="page-description">
   {% if type == "folders" %}
   Carpetes amb el mateix {% if mode == "name-size" %}camí i mida{% else %}camí{% endif %} en més d'un disc.
+  {% elif mode == "hash" %}
+  Fitxers amb el <strong>mateix contingut</strong> (SHA-256 idèntic), {% if hash_scope == "cross" %}en més d'un disc{% else %}en qualsevol disc, també dins del mateix{% endif %}. Només es poden comparar els fitxers que ja tenen hash calculat:
+  <strong>{{ '%.1f' | format(hash_coverage.pct) }} %</strong> ({{ hash_coverage.hashed }} de {{ hash_coverage.files }}).
   {% else %}
   Fitxers amb el mateix {% if mode == "name-size" %}nom i mida{% else %}nom{% endif %} en més d'un disc.
   {% endif %}
@@ -28,6 +31,14 @@
         <select name="mode" id="mode">
           <option value="name" {% if mode == "name" %}selected{% endif %}>Per nom / camí</option>
           <option value="name-size" {% if mode == "name-size" %}selected{% endif %}>Per nom / camí + mida</option>
+          <option value="hash" {% if mode == "hash" %}selected{% endif %}>Per contingut (hash SHA-256, només fitxers)</option>
+        </select>
+      </div>
+      <div class="form-group" id="hash-scope-group">
+        <label for="hash_scope">Abast (per contingut)</label>
+        <select name="hash_scope" id="hash_scope">
+          <option value="any" {% if hash_scope == "any" %}selected{% endif %}>Qualsevol disc (inclou còpies dins del mateix disc)</option>
+          <option value="cross" {% if hash_scope == "cross" %}selected{% endif %}>Només en més d'un disc</option>
         </select>
       </div>
     </fieldset>
@@ -96,7 +107,9 @@
     <summary>
       <span class="section-icon" aria-hidden="true">&#x1F4CB;</span>
       {% if type == "files" %}
-        {% if mode == "name-size" %}
+        {% if mode == "hash" %}
+        {{ g.name }} — {{ g.size_bytes | format_bytes }} × {{ g.total_files }} còpies en {{ g.ndrives }} disc(s) — recuperable: <strong>{{ g.wasted_bytes | format_bytes }}</strong> <code title="{{ g.hash_sha256 }}">{{ g.hash_sha256[:12] }}…</code>
+        {% elif mode == "name-size" %}
         {{ g.name }} — {{ g.size_bytes | format_bytes }} — {{ g.ndrives }} discs, {{ g.total_files }} fitxers
         {% else %}
         {{ g.name }} — {{ g.ndrives }} discs, {{ g.total_files }} fitxers
@@ -117,6 +130,7 @@
               {% if type == "files" %}
               <th>Disc</th>
               <th>Ruta</th>
+              {% if mode == "hash" %}<th>Nom</th>{% endif %}
               <th>Mida</th>
               <th>Modificat</th>
               {% else %}
@@ -134,6 +148,7 @@
             <tr>
               <td>{{ f.drive_id }}</td>
               <td class="mono">{{ f.relative_path }}</td>
+              {% if mode == "hash" %}<td class="mono">{{ f.name }}</td>{% endif %}
               <td class="bytes">{{ f.size_bytes | format_bytes }}</td>
               <td>{{ f.modified_utc or "" }}</td>
             </tr>
@@ -170,6 +185,8 @@
 <script>
 (function () {
   var typeSelect = document.getElementById('type');
+  var modeSelect = document.getElementById('mode');
+  var hashScopeGroup = document.getElementById('hash-scope-group');
   var optionsFiles = document.getElementById('duplicates-options-files');
   var optionsFolders = document.getElementById('duplicates-options-folders');
   if (!typeSelect || !optionsFiles || !optionsFolders) return;
@@ -179,8 +196,15 @@
     optionsFiles.setAttribute('aria-hidden', isFiles ? 'false' : 'true');
     optionsFolders.style.display = isFiles ? 'none' : '';
     optionsFolders.setAttribute('aria-hidden', isFiles ? 'true' : 'false');
+    if (modeSelect) {
+      var hashOpt = modeSelect.querySelector('option[value="hash"]');
+      if (hashOpt) hashOpt.disabled = !isFiles;
+      if (!isFiles && modeSelect.value === 'hash') modeSelect.value = 'name';
+      if (hashScopeGroup) hashScopeGroup.style.display = (isFiles && modeSelect.value === 'hash') ? '' : 'none';
+    }
   }
   typeSelect.addEventListener('change', updateVisibility);
+  if (modeSelect) modeSelect.addEventListener('change', updateVisibility);
   updateVisibility();
 })();
 </script>

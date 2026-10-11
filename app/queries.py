@@ -313,6 +313,7 @@ def _build_duplicate_files_where(
 
 
 DUPLICATE_NAMES_SORT_COLUMNS = ("name", "ndrives", "total_files")
+DUPLICATE_HASH_SORT_COLUMNS = ("wasted_bytes", "size_bytes", "ndrives", "total_files")
 DUPLICATE_NAME_SIZE_SORT_COLUMNS = ("name", "size_bytes", "ndrives", "total_files")
 DUPLICATE_FOLDERS_PATH_SORT_COLUMNS = ("folder_path", "ndrives", "total_folders")
 DUPLICATE_FOLDERS_PATH_SIZE_SORT_COLUMNS = ("folder_path", "total_bytes", "ndrives", "total_folders")
@@ -357,6 +358,76 @@ def get_duplicate_names_groups(
     )
     total = cur_total.fetchone()[0]
     return groups, total
+
+
+def get_duplicate_hash_groups(
+    conn: sqlite3.Connection,
+    limit: int,
+    offset: int,
+    drive_ids: list[str] | None = None,
+    min_size_bytes: int = 0,
+    extensions: list[str] | None = None,
+    exclude_terms: list[str] | None = None,
+    include_terms: list[str] | None = None,
+    cross_drive_only: bool = False,
+    sort_by: str | None = None,
+    sort_dir: str = "desc",
+) -> tuple[list[dict[str, Any]], int]:
+    """Grups de fitxers amb el mateix contingut (hash_sha256), presents i amb hash calculat.
+
+    wasted_bytes = mida x (còpies - 1): espai que s'alliberaria deixant una sola còpia.
+    cross_drive_only: només grups repartits en més d'un disc; si no, també dins del mateix disc.
+    Els fitxers de 0 bytes s'ignoren (tots comparteixen el mateix hash).
+    """
+    exclude_terms = exclude_terms or []
+    where, params = _build_duplicate_files_where(
+        drive_ids, min_size_bytes, extensions, exclude_terms, include_terms
+    )
+    where += " AND hash_sha256 IS NOT NULL AND size_bytes > 0"
+    having = "COUNT(*) > 1" + (" AND COUNT(DISTINCT drive_id) > 1" if cross_drive_only else "")
+    base_sql = f"FROM inventory WHERE {where} GROUP BY hash_sha256 HAVING {having}"
+    if sort_by and sort_by in DUPLICATE_HASH_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):
+        order_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
+        order_by = f"{sort_by} {order_dir}, total_files DESC"
+    else:
+        order_by = "wasted_bytes DESC, total_files DESC"
+    cur = conn.execute(
+        f"""
+        SELECT hash_sha256, MIN(size_bytes) AS size_bytes, MIN(name) AS name,
+               COUNT(DISTINCT drive_id) AS ndrives, COUNT(*) AS total_files,
+               MIN(size_bytes) * (COUNT(*) - 1) AS wasted_bytes
+        {base_sql}
+        ORDER BY {order_by} LIMIT ? OFFSET ?
+        """,
+        params + [limit, offset],
+    )
+    groups = [dict(row) for row in cur.fetchall()]
+    total = conn.execute(f"SELECT COUNT(*) FROM (SELECT 1 {base_sql})", params).fetchone()[0]
+    return groups, total
+
+
+def get_duplicate_hash_files(
+    conn: sqlite3.Connection, hash_sha256: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Fitxers (presents) d'un grup de duplicats per hash."""
+    cur = conn.execute(
+        """
+        SELECT drive_id, relative_path, name, size_bytes, modified_utc
+        FROM inventory WHERE hash_sha256 = ? AND missing_since_utc IS NULL
+        ORDER BY drive_id, relative_path LIMIT ?
+        """,
+        (hash_sha256, limit),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+def get_hash_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Totals de la taula drives: fitxers presents i fitxers amb hash."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(files_count), 0), COALESCE(SUM(hashed_files), 0) FROM drives"
+    ).fetchone()
+    files, hashed = int(row[0]), int(row[1])
+    return {"files": files, "hashed": hashed, "pct": (100.0 * hashed / files) if files else 0.0}
 
 
 def get_duplicate_name_files(

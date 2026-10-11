@@ -67,8 +67,13 @@ def duplicates_page(
     if type_ not in ("files", "folders"):
         type_ = "files"
     mode = (request.query_params.get("mode") or "name").strip().lower()
-    if mode not in ("name", "name-size"):
+    if mode not in ("name", "name-size", "hash"):
         mode = "name"
+    if type_ == "folders" and mode == "hash":
+        mode = "name"
+    hash_scope = (request.query_params.get("hash_scope") or "any").strip().lower()
+    if hash_scope not in ("any", "cross"):
+        hash_scope = "any"
     submitted = request.query_params.get("submitted") == "1"
     page = max(1, int(request.query_params.get("page", 1)))
     offset = (page - 1) * PER_PAGE
@@ -113,11 +118,12 @@ def duplicates_page(
     if dir_dup not in ("asc", "desc"):
         dir_dup = "asc"
     if type_ == "files":
-        dup_sort_columns = (
-            queries.DUPLICATE_NAME_SIZE_SORT_COLUMNS
-            if mode == "name-size"
-            else queries.DUPLICATE_NAMES_SORT_COLUMNS
-        )
+        if mode == "hash":
+            dup_sort_columns = queries.DUPLICATE_HASH_SORT_COLUMNS
+        elif mode == "name-size":
+            dup_sort_columns = queries.DUPLICATE_NAME_SIZE_SORT_COLUMNS
+        else:
+            dup_sort_columns = queries.DUPLICATE_NAMES_SORT_COLUMNS
     else:
         dup_sort_columns = (
             queries.DUPLICATE_FOLDERS_PATH_SIZE_SORT_COLUMNS
@@ -129,6 +135,7 @@ def duplicates_page(
 
     all_drive_ids = queries.get_drive_ids(conn)
     extensions = queries.get_extensions_for_filter(conn)
+    hash_coverage = queries.get_hash_coverage(conn)
     groups_with_entries = []
     total = 0
     total_pages = 0
@@ -136,7 +143,28 @@ def duplicates_page(
 
     if submitted:
         if type_ == "files":
-            if mode == "name":
+            if mode == "hash":
+                groups, total = queries.get_duplicate_hash_groups(
+                    conn,
+                    limit=PER_PAGE,
+                    offset=offset,
+                    drive_ids=drive_ids_filter,
+                    min_size_bytes=min_size_bytes,
+                    extensions=extensions_filter if extensions_filter else None,
+                    exclude_terms=exclude_terms,
+                    include_terms=include_terms,
+                    cross_drive_only=(hash_scope == "cross"),
+                    sort_by=sort_dup,
+                    sort_dir=dir_dup,
+                )
+                total_pages = max(1, ceil(total / PER_PAGE)) if total else 0
+                prev_url, next_url = _pagination_urls(request, page, total_pages)
+                for g in groups:
+                    files = queries.get_duplicate_hash_files(
+                        conn, g["hash_sha256"], limit=FILES_PER_GROUP
+                    )
+                    groups_with_entries.append({**g, "files": files})
+            elif mode == "name":
                 groups, total = queries.get_duplicate_names_groups(
                     conn,
                     limit=PER_PAGE,
@@ -231,6 +259,7 @@ def duplicates_page(
         "folder_path": "Camí",
         "total_bytes": "Mida",
         "total_folders": "Nº carpetes",
+        "wasted_bytes": "Espai recuperable",
     }
     sort_labels_duplicates = {col: SORT_LABELS.get(col, col) for col in dup_sort_columns}
 
@@ -239,6 +268,8 @@ def duplicates_page(
             "request": request,
             "type": type_,
             "mode": mode,
+            "hash_scope": hash_scope,
+            "hash_coverage": hash_coverage,
             "submitted": submitted,
             "groups": groups_with_entries,
             "total": total,
