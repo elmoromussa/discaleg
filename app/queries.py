@@ -53,41 +53,44 @@ def get_top_folders(conn: sqlite3.Connection, limit: int = 30) -> list[dict[str,
 SEARCH_SCOPE_VALUES = ("name", "path", "both")
 
 
-def _user_to_like_pattern(q: str) -> str:
-    """
-    Converteix la paraula clau de l'usuari en un patró LIKE per a SQL.
-    * -> % (qualsevol seqüència), ? -> _ (un caràcter). Si no hi ha * o % al començament/final, s'afegeix %.
-    """
-    if not q:
-        return "%"
-    s = q.replace("*", "%").replace("?", "_")
-    if not s.startswith("%"):
-        s = "%" + s
-    if not s.endswith("%"):
-        s = s + "%"
-    return s
+def _search_term_to_like_pattern(term: str) -> str:
+    """Patró LIKE per coincidència parcial: * -> % (qualsevol seqüència), ? -> _ (un caràcter)."""
+    return f"%{term.replace('*', '%').replace('?', '_')}%"
 
 
 def _build_search_inventory_where(
     drive_ids: list[str] | None,
-    term: str,
+    name_like_terms: list[str],
+    path_like_terms: list[str],
+    flex_like_terms: list[str],
     min_size_bytes: int,
     exclude_terms: list[str],
     extensions: list[str] | None = None,
-    scope: str = "both",
 ) -> tuple[str, list]:
-    """Construïx la clàusula WHERE i els paràmetres per search_inventory."""
-    if scope not in SEARCH_SCOPE_VALUES:
-        scope = "both"
-    if scope == "name":
-        conditions = ["(name LIKE ?)"]
-        params: list = [term]
-    elif scope == "path":
-        conditions = ["(relative_path LIKE ?)"]
-        params = [term]
+    """Construïx WHERE per search_inventory.
+    - flex_like_terms: cada terme (name OR relative_path), tots amb AND (mode «nom o ruta»).
+    - name_like_terms / path_like_terms: AND dins cada eix; els dos eixos es combinen amb AND (buit = sense filtre)."""
+    main_parts: list[str] = []
+    params: list = []
+
+    if flex_like_terms:
+        sub = ["(name LIKE ? OR relative_path LIKE ?)"] * len(flex_like_terms)
+        main_parts.append("(" + " AND ".join(sub) + ")")
+        for lt in flex_like_terms:
+            params.extend([lt, lt])
+    elif name_like_terms or path_like_terms:
+        if name_like_terms:
+            main_parts.append("(" + " AND ".join(["name LIKE ?"] * len(name_like_terms)) + ")")
+            params.extend(name_like_terms)
+        if path_like_terms:
+            main_parts.append(
+                "(" + " AND ".join(["relative_path LIKE ?"] * len(path_like_terms)) + ")"
+            )
+            params.extend(path_like_terms)
     else:
-        conditions = ["(name LIKE ? OR relative_path LIKE ?)"]
-        params = [term, term]
+        main_parts.append("1 = 0")
+
+    conditions = [" AND ".join(main_parts)]
     if drive_ids:
         placeholders = ",".join("?" * len(drive_ids))
         conditions.insert(0, f"drive_id IN ({placeholders})")
@@ -103,7 +106,7 @@ def _build_search_inventory_where(
     for ex in exclude_terms:
         if not ex.strip():
             continue
-        excl = _user_to_like_pattern(ex.strip())
+        excl = _search_term_to_like_pattern(ex.strip())
         conditions.append("name NOT LIKE ? AND relative_path NOT LIKE ?")
         params.extend([excl, excl])
     where = " AND ".join(conditions)
@@ -112,7 +115,6 @@ def _build_search_inventory_where(
 
 def search_inventory(
     conn: sqlite3.Connection,
-    q: str,
     drive_ids: list[str] | None,
     limit: int,
     offset: int,
@@ -121,15 +123,37 @@ def search_inventory(
     extensions: list[str] | None = None,
     sort_by: str | None = None,
     sort_dir: str = "asc",
-    scope: str = "both",
+    name_terms: list[str] | None = None,
+    path_terms: list[str] | None = None,
+    flex_terms: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Cerca en name i/o relative_path segons scope. Retorna (rows, total_count)."""
+    """Cerca a inventory. Mode flex: cada terme en (name OR path), AND entre termes.
+    Mode eixos: name_terms i path_terms es combinen amb AND (llistes buides = sense filtre en aquell eix).
+    No combineu flex amb eixos en la mateixa crida (flex té prioritat si no és buit)."""
     exclude_terms = exclude_terms or []
-    if scope not in SEARCH_SCOPE_VALUES:
-        scope = "both"
-    term = _user_to_like_pattern(q)
+    name_terms = list(name_terms or [])
+    path_terms = list(path_terms or [])
+    flex_terms = list(flex_terms or [])
+
+    if flex_terms:
+        like_flex = [_search_term_to_like_pattern(t) for t in flex_terms]
+        like_name: list[str] = []
+        like_path: list[str] = []
+    else:
+        like_flex = []
+        if not name_terms and not path_terms:
+            return [], 0
+        like_name = [_search_term_to_like_pattern(t) for t in name_terms]
+        like_path = [_search_term_to_like_pattern(t) for t in path_terms]
+
     where, params = _build_search_inventory_where(
-        drive_ids, term, min_size_bytes, exclude_terms, extensions, scope
+        drive_ids,
+        like_name,
+        like_path,
+        like_flex,
+        min_size_bytes,
+        exclude_terms,
+        extensions,
     )
     params_count = list(params)
     if sort_by and sort_by in SEARCH_INVENTORY_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):
@@ -155,14 +179,19 @@ def search_inventory(
 
 def _build_search_folders_where(
     drive_ids: list[str] | None,
-    term: str,
+    like_terms: list[str],
     max_depth: int | None,
     min_size_bytes: int,
     exclude_terms: list[str],
 ) -> tuple[str, list]:
     """Construïx la clàusula WHERE i els paràmetres per search_folders."""
-    conditions = ["folder_path LIKE ?"]
-    params: list = [term]
+    if not like_terms:
+        conditions = ["1 = 0"]
+        params: list = []
+    else:
+        parts = ["folder_path LIKE ?"] * len(like_terms)
+        conditions = ["(" + " AND ".join(parts) + ")"]
+        params = list(like_terms)
     if drive_ids:
         placeholders = ",".join("?" * len(drive_ids))
         conditions.insert(0, f"drive_id IN ({placeholders})")
@@ -177,14 +206,14 @@ def _build_search_folders_where(
         if not ex.strip():
             continue
         conditions.append("folder_path NOT LIKE ?")
-        params.append(_user_to_like_pattern(ex.strip()))
+        params.append(_search_term_to_like_pattern(ex.strip()))
     where = " AND ".join(conditions)
     return where, params
 
 
 def search_folders(
     conn: sqlite3.Connection,
-    q: str,
+    query_terms: list[str],
     drive_ids: list[str] | None,
     limit: int,
     offset: int,
@@ -194,11 +223,14 @@ def search_folders(
     sort_by: str | None = None,
     sort_dir: str = "asc",
 ) -> tuple[list[dict[str, Any]], int]:
-    """Cerca en folder_path (folder_stats). Retorna (rows, total_count)."""
+    """Cerca en folder_path (folder_stats). Tots els termes han de coincidir (AND).
+    Retorna (rows, total_count)."""
     exclude_terms = exclude_terms or []
-    term = _user_to_like_pattern(q)
+    if not query_terms:
+        return [], 0
+    like_terms = [_search_term_to_like_pattern(t) for t in query_terms]
     where, params = _build_search_folders_where(
-        drive_ids, term, max_depth, min_size_bytes, exclude_terms
+        drive_ids, like_terms, max_depth, min_size_bytes, exclude_terms
     )
     params_count = list(params)
     if sort_by and sort_by in FOLDER_STATS_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):

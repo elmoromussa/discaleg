@@ -2,35 +2,53 @@
 {% block title %}Cercar — DiscScope{% endblock %}
 {% block content %}
 <h1>Cercar per paraula clau</h1>
-<p class="page-description">Cerca en fitxers i/o carpetes per paraula clau en el nom o la ruta. Configureu els filtres i premeu «Cercar».</p>
+<p class="page-description">Ompliu <strong>Nom del fitxer</strong> i/o <strong>Ruta</strong> per combinar fragments (I lògic en cada camp). La <strong>cerca clàssica</strong> (un sol camp) serveix per compatibilitat amb enllaços <code>?q=</code>. Comodins: <code>*</code> o <code>%</code>.</p>
 <details class="search-help">
   <summary>Com cercar / Exemples</summary>
-  <p>La cerca coincideix el text en el nom del fitxer/carpeta o en la ruta (coincidència parcial). Trieu «Camp de la cerca»: Nom del fitxer/carpeta o Ruta. Exemples: «informe» troba «informe.pdf» o «/docs/informe/». Podeu usar <strong>placeholders</strong>: <code>*</code> equival a qualsevol seqüència de caràcters i <code>?</code> a un sol caràcter (ex: <code>informe*.pdf</code>, <code>foto?.jpg</code>). Podeu restringir per extensió (ex: txt, pdf) a les opcions per fitxers i excloure paraules o frases a la caixa inferior.</p>
+  <p><strong>Recomanat: nom + ruta</strong> — Dos camps independents; tots els fragments del <em>nom</em> han d’aparèixer al nom del fitxer i tots els de la <em>ruta</em> a la ruta relativa. Si ompliu només un dels dos camps, es comporta com un filtre únic.</p>
+  <ul>
+    <li>Ruta <code>projectes 2024</code> + nom <code>factura</code> → fitxers anomenats amb <code>factura</code> dins una ruta que conté <code>projectes</code> i <code>2024</code>.</li>
+    <li>Nom <code>drive panograma</code> (o <code>drive,panograma</code>) → <code>drive_panograma.jpg</code>.</li>
+  </ul>
+  <p><strong>Cerca clàssica (un camp)</strong> — Trieu «Camp de la cerca»: només <strong>nom</strong>, només <strong>ruta</strong>, o <strong>nom o ruta</strong> (cada paraula ha d’aparèixer en el nom <em>o</em> en la ruta, sense exigir els dos). En «Cercar en» també podeu incloure carpetes: la cerca de carpetes usa la ruta; amb nom+ruta es combinen tots els fragments sobre el camí de la carpeta.</p>
+  <p><strong>Diverses paraules (I)</strong> — Espais, comes, <code>+</code> o salts de línia separen paraules; totes han de coincidir dins el mateix eix (o dins nom o ruta al mode «nom o ruta»).</p>
+  <p><strong>Comodins</strong> — <code>*</code> equival a qualsevol seqüència de caràcters i <code>?</code> a un sol caràcter (ex: <code>informe*.pdf</code>, <code>foto?.jpg</code>). A <strong>Excloure</strong> també s’accepta <code>*</code> com a comodí.</p>
+  <p><strong>Extensions</strong> (opcions avançades) — Diverses separades per comes o línies; el punt és opcional (<code>jpg</code> = <code>.jpg</code>).</p>
 </details>
 
 <div class="card advanced-search">
-  <form method="get" action="{{ request.url_for('search_route') }}" class="search-form-grid">
+  <form method="get" action="{{ request.url_for('search_route') }}" class="search-form-grid" novalidate>
+    {% if search_error %}
+    <p class="form-hint search-error" role="alert"><strong>Error:</strong> {{ search_error }}</p>
+    {% endif %}
     <fieldset class="advanced-search-fieldset">
       <legend>Cerca bàsica</legend>
       <div class="form-group">
-        <label for="q">Paraules clau</label>
-        <input type="text" name="q" id="q" value="{{ q }}" placeholder="Nom o ruta" required>
+        <label for="q_name">Nom del fitxer (fragments)</label>
+        <input type="text" name="q_name" id="q_name" value="{{ q_name }}" placeholder="Opcional — ex: factura, informe 2024" autocomplete="off">
+        <p class="form-hint">Diverses paraules: totes han d’aparèixer al <strong>nom</strong> del fitxer.</p>
       </div>
       <div class="form-group">
-        <label for="scope">Camp de la cerca</label>
-        <select name="scope" id="scope">
-          <option value="name" {% if scope == "name" or scope == "both" %}selected{% endif %}>Nom del fitxer/carpeta</option>
-          <option value="path" {% if scope == "path" %}selected{% endif %}>Ruta</option>
-        </select>
+        <label for="q_path">Ruta (fragments)</label>
+        <input type="text" name="q_path" id="q_path" value="{{ q_path }}" placeholder="Opcional — ex: projectes, backup" autocomplete="off">
+        <p class="form-hint">Diverses paraules: totes han d’aparèixer a la <strong>ruta</strong> (carpetes + fitxer).</p>
       </div>
-      <div class="form-group form-group-search-type">
-        <label for="search_type">Cercar en</label>
-        <select name="search_type" id="search_type">
-          <option value="files" {% if search_type == "files" %}selected{% endif %}>Només fitxers</option>
-          <option value="folders" {% if search_type == "folders" %}selected{% endif %}>Només carpetes</option>
-          <option value="both" {% if search_type == "both" %}selected{% endif %}>Fitxers i carpetes</option>
-        </select>
-      </div>
+      <p class="form-hint">Si ompliu aquests dos camps (o només un), el camp clàssic de sota s’ignora. Cal almenys un fragment vàlid en algun camp.</p>
+      <details class="legacy-search-details">
+        <summary>Cerca en un sol camp (compatibilitat <code>?q=</code>)</summary>
+        <div class="form-group">
+          <label for="q">Paraules clau</label>
+          <input type="text" name="q" id="q" value="{{ q }}" placeholder="Només si no useu nom+ruta a dalt" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="scope">Camp de la cerca</label>
+          <select name="scope" id="scope">
+            <option value="name" {% if scope == "name" %}selected{% endif %}>Nom del fitxer</option>
+            <option value="path" {% if scope == "path" %}selected{% endif %}>Ruta</option>
+            <option value="both" {% if scope == "both" %}selected{% endif %}>Nom o ruta (cada paraula en qualsevol dels dos)</option>
+          </select>
+        </div>
+      </details>
       <div class="form-group">
         <label for="exclude">Paraules o frases a excloure</label>
         <textarea name="exclude" id="exclude" placeholder="Separades per comes o salts de línia" rows="2">{{ exclude }}</textarea>
@@ -79,7 +97,7 @@
   </form>
 </div>
 
-{% if q %}
+{% if search_executed %}
   {% if search_type in ("files", "both") %}
     <h2>Fitxers</h2>
     <p><strong>{{ total_files }}</strong> coincidència(s). Pàgina {{ page_files }} de {{ total_pages_files }}.</p>
@@ -199,8 +217,8 @@
     <div class="empty-state">No s'han trobat carpetes.</div>
     {% endif %}
   {% endif %}
-{% else %}
-<p class="page-description">Introduïu una paraula clau per cercar.</p>
+{% elif not search_attempted %}
+<p class="page-description">Introduïu fragments al nom i/o la ruta, o obriu la cerca clàssica, i premeu «Cercar».</p>
 {% endif %}
 <script>
 (function () {
