@@ -18,6 +18,8 @@ Els fitxers sense extensió tenen `extension = '(no_ext)'`.
 
 **Versió 3: índex de text.** `inventory_fts` és un índex FTS5 amb tokenitzador *trigram* sobre nom i ruta, mantingut per triggers. La cerca de fitxers l'usa per podar candidats i després aplica el filtre exacte de sempre, així que els resultats són els mateixos però en mil·lisegons en lloc de segons. Fa créixer la DB (uns 2 GB per a 4,8 M de fitxers) i la construcció inicial tarda uns dos minuts. Fragments de menys de 3 caràcters no es poden indexar i cauen al camí lent.
 
+**Versió 4: índex per a duplicats.** L'índex de nom se substitueix per un índex parcial cobridor sobre nom, mida, disc i extensió dels fitxers presents. Els duplicats per nom i per nom+mida es resolen recorrent només l'índex (d'uns 11 s per pàgina a uns 2 s amb 4,8 M de fitxers), i la DB només creix uns 50 MB.
+
 ### Migrar una base de dades antiga
 
 Una DB creada amb versions anteriors (sense `drives` ni hashes) s'ha de migrar un sol cop. L'app ho detecta i ho avisa (error 503 amb la instrucció). Treballa sobre una còpia si vols conservar l'original:

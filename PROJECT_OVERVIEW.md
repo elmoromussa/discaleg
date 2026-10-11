@@ -38,11 +38,11 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 ## Base de dades
 
 - **Ruta:** `app/config.py` — per defecte `PROJECT_ROOT / "data" / "arxiu_discs.db"`; override amb variable d’entorn `DATABASE_PATH`.
-- **Esquema versió 3** (`PRAGMA user_version = 3`, definit a `app/schema.py`; la v3 afegeix `inventory_fts`, FTS5 trigram sobre name i relative_path amb triggers de sincronització):
+- **Esquema versió 4** (`PRAGMA user_version = 4`, definit a `app/schema.py`; la v3 afegeix `inventory_fts`, FTS5 trigram sobre name i relative_path amb triggers de sincronització; la v4 substitueix l'índex de nom per `idx_inventory_name_size(name, size_bytes, drive_id, extension) WHERE missing_since_utc IS NULL`):
 
   - **drives**: drive_id (PK), label, kind, interface, vendor, model, serial_number, volume_serial, filesystem, capacity_bytes, location, status, notes, files_count, total_bytes, hashed_files, hashed_bytes, last_root_path, last_scan_utc, created_utc, updated_utc.
   - **scans**: scan_id, drive_id, root_path, mode (update/replace), started_utc, finished_utc, status (running/done/aborted), files_count, total_bytes, files_new, files_changed, files_missing, tool_version, notes.
-  - **inventory**: id, drive_id, relative_path, name, extension (`(no_ext)` si no en té), size_bytes, modified_utc, hash_sha256, hashed_utc, hash_size_bytes, hash_mtime_utc, first_seen_scan, last_seen_scan, missing_since_utc. Índexs: drive_id, (drive_id, extension), name, **únic (drive_id, relative_path)**, hash_sha256 (parcial), size_bytes.
+  - **inventory**: id, drive_id, relative_path, name, extension (`(no_ext)` si no en té), size_bytes, modified_utc, hash_sha256, hashed_utc, hash_size_bytes, hash_mtime_utc, first_seen_scan, last_seen_scan, missing_since_utc. Índexs: drive_id, (drive_id, extension), **únic (drive_id, relative_path)**, hash_sha256 (parcial), size_bytes, (name, size_bytes, drive_id, extension) parcial sobre fitxers presents.
   - **folder_stats**: id, drive_id, folder_path (relatiu a l'arrel; `''` = arrel), folder_name, folder_depth, files_count, total_bytes. Índexs: drive_id, folder_name.
   - **by_extension**: id, drive_id, extension, count, total_bytes. Índex: drive_id.
 

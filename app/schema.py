@@ -7,6 +7,9 @@ Versió (PRAGMA user_version):
          (drive_id, relative_path), extensió buida -> '(no_ext)', folder_path relatiu.
   3    + índex de text complet FTS5 (trigram) sobre inventory(name, relative_path),
          mantingut amb triggers; accelera la cerca per subcadena.
+  4    idx_inventory_name substituït per un índex parcial cobridor
+         (name, size_bytes, drive_id, extension) WHERE missing_since_utc IS NULL:
+         els duplicats per nom i per nom+mida es resolen només amb l'índex.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -19,7 +22,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Extensió canònica per a fitxers sense extensió (coincideix amb l'escàner directe).
 NO_EXT = "(no_ext)"
@@ -71,7 +74,6 @@ CREATE TABLE IF NOT EXISTS inventory (
 );
 CREATE INDEX IF NOT EXISTS idx_inventory_drive ON inventory(drive_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_extension ON inventory(drive_id, extension);
-CREATE INDEX IF NOT EXISTS idx_inventory_name ON inventory(name);
 
 CREATE TABLE IF NOT EXISTS folder_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,6 +180,16 @@ END;
 """
 
 
+# v4: índex parcial cobridor per a duplicats per nom / nom+mida (GROUP BY sense ordenació
+# temporal ni accés a la taula) i per a cercar per nom exacte entre fitxers presents.
+# Substitueix idx_inventory_name (name), que la cerca per LIKE no feia servir.
+_DDL_V4_INDEXES = """
+DROP INDEX IF EXISTS idx_inventory_name;
+CREATE INDEX IF NOT EXISTS idx_inventory_name_size
+    ON inventory(name, size_bytes, drive_id, extension) WHERE missing_since_utc IS NULL;
+"""
+
+
 def _exec_statements(conn: sqlite3.Connection, sql: str) -> None:
     """Executa un bloc DDL sentència a sentència (executescript faria COMMIT implícit).
 
@@ -230,6 +242,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         # DB nova (o buida): índexs, FTS i versió directament
         _exec_statements(conn, _DDL_V2_INDEXES)
         _exec_statements(conn, _DDL_V3_FTS)
+        _exec_statements(conn, _DDL_V4_INDEXES)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -262,6 +275,8 @@ def migrate(
         _migrate_to_v2(conn, dict(legacy_roots or {}), dict(legacy_dates or {}), log)
     if get_user_version(conn) < 3:
         _migrate_to_v3(conn, log)
+    if get_user_version(conn) < 4:
+        _migrate_to_v4(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -381,6 +396,19 @@ def _migrate_to_v3(conn: sqlite3.Connection, log: Callable[[str], None]) -> None
         conn.execute("ROLLBACK")
         raise
     log("  índex FTS construït")
+
+
+def _migrate_to_v4(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 4 (índex cobridor per a duplicats)…")
+    conn.execute("BEGIN")
+    try:
+        _exec_statements(conn, _DDL_V4_INDEXES)
+        conn.execute("PRAGMA user_version = 4")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log("  índex idx_inventory_name_size creat (idx_inventory_name eliminat)")
 
 
 def refresh_drive_counters(

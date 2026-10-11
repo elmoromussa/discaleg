@@ -478,12 +478,16 @@ def get_hash_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
 def get_duplicate_name_files(
     conn: sqlite3.Connection, name: str, limit: int = 50
 ) -> list[dict[str, Any]]:
-    """Fitxers d'un grup de duplicats per nom."""
+    """Fitxers d'un grup de duplicats per nom.
+
+    L'ORDER BY segueix l'ordre de idx_inventory_name_size (mida, disc) perquè el LIMIT
+    sigui incremental: grups de centenars de milers de fitxers (p. ex. tile_0.jpg) es
+    resolen en mil·lisegons en lloc d'ordenar-los tots."""
     cur = conn.execute(
         """
         SELECT drive_id, relative_path, name, size_bytes, modified_utc
         FROM inventory WHERE name = ? AND missing_since_utc IS NULL
-        ORDER BY drive_id, relative_path LIMIT ?
+        ORDER BY size_bytes, drive_id, relative_path LIMIT ?
         """,
         (name, limit),
     )
