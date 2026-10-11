@@ -29,7 +29,7 @@ pip install -r requirements.txt
 
 - **`data/`** — Conté el fitxer de la base de dades (`arxiu_discs.db`, més `-wal`/`-shm` en mode WAL). Es crea automàticament en auditar el primer disc des de **Discs**. No es versiona (`.gitignore`).
 - **`app/`** — Aplicació FastAPI: `schema.py` (esquema i migracions), `audit_to_db.py` (escaneig directe a la DB), `migrate.py` (CLI de migració), `queries*.py`, `routes/`, `templates/`, `static/`.
-- **`tools/`** — Eines de línia d'ordres: `hash_files.py` (SHA-256 incremental per disc) i els scripts originals d'auditoria en CSV (`quick_audit_archive.py`, `import_audit_to_db.py`, `import_all_audits.bat`), conservats com a procedència de la base de dades.
+- **`tools/`** — Eines de línia d'ordres: `scan_drive.py` (escaneig amb progrés al terminal), `hash_files.py` (SHA-256 incremental per disc) i els scripts originals d'auditoria en CSV (`quick_audit_archive.py`, `import_audit_to_db.py`, `import_all_audits.bat`), conservats com a procedència de la base de dades.
 - **`docs/`** — Documentació (GitHub Pages).
 - **Arrel del projecte** — `requirements.txt`, `run_inventari_WIN.bat`, `PROJECT_OVERVIEW.md` (referència del projecte), `.gitignore`, `.gitattributes`.
 

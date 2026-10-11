@@ -41,7 +41,16 @@ Des de **Discs** (o programàticament amb `app.audit_to_db.scan_drive`). Dos mod
 
 El recorregut usa `os.scandir` (a Windows mida i data venen amb el llistat, sense crides addicionals) i la fusió es fa en SQL per conjunts. Un disc d'un milió de fitxers es recorre en pocs minuts; el límit és la velocitat del disc en llistar directoris.
 
-Cada escaneig registra el serial del volum a `drives.volume_serial`. Això permet detectar més tard si s'està processant el disc equivocat (per exemple dos discs externs que es munten a la mateixa lletra).
+Cada escaneig registra el serial del volum a `drives.volume_serial`. Si en un escaneig posterior el volum muntat té un serial diferent, s'atura amb un missatge (probable disc equivocat, per exemple dos discs externs que es munten a la mateixa lletra). Si realment és el mateix *drive_id* reformatat o un disc nou, usa **Reiniciar el disc** (o `--force` al CLI).
+
+### Escanejar des del terminal
+
+Per a discs grans és més còmode veure el progrés al terminal:
+
+```bash
+python tools/scan_drive.py --drive EXT-A --root F:\npython tools/scan_drive.py --drive NOU-1 --root G:\ --kind hdd --label "Toshiba 4TB"
+python tools/scan_drive.py --drive EXT-A --replace      # reinicia (perd hashes)
+```
 
 ## Calcular hashes (SHA-256)
 

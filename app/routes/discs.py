@@ -70,7 +70,8 @@ def _run_scan_in_thread(db_path: Path, root_path: Path, drive_id: str, mode: str
     """Executa l'escaneig en un thread; la connexió es crea i es tanca aquí."""
     conn = sqlite3.connect(str(db_path), timeout=60.0)
     try:
-        return scan_drive(conn, root_path, drive_id, mode=mode)
+        # «Reiniciar» també accepta un volum amb serial diferent (disc reformatat o nou)
+        return scan_drive(conn, root_path, drive_id, mode=mode, force_volume=(mode == "replace"))
     finally:
         conn.close()
 

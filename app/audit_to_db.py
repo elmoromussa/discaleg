@@ -120,8 +120,13 @@ def scan_drive(
     mode: str = "update",
     progress: ProgressFn | None = None,
     notes: str | None = None,
+    force_volume: bool = False,
 ) -> ScanResult:
-    """Escaneja root_path i fusiona el resultat a la DB sota drive_id."""
+    """Escaneja root_path i fusiona el resultat a la DB sota drive_id.
+
+    Si el disc ja té un volume_serial registrat i no coincideix amb el del volum muntat
+    a root_path, s'atura (probable disc equivocat) llevat que force_volume sigui True.
+    """
     import time
 
     t0 = time.time()
@@ -143,6 +148,17 @@ def scan_drive(
 
     now = utc_now_iso()
     vol = get_volume_info(Path(root))
+    prev = conn.execute(
+        "SELECT volume_serial, last_root_path FROM drives WHERE drive_id = ?", (drive_id,)
+    ).fetchone()
+    if (prev and prev[0] and vol["volume_serial"] and prev[0] != vol["volume_serial"]
+            and not force_volume):
+        raise RuntimeError(
+            f"El volum muntat a {root} té el serial {vol['volume_serial']}, però «{drive_id}» "
+            f"es va escanejar amb el serial {prev[0]} (arrel {prev[1]}). Si és el mateix disc "
+            f"reformatat o un disc nou amb aquest identificador, marca «Reiniciar el disc» "
+            f"(o --force al CLI)."
+        )
 
     # --- drives + scans (commit immediat: si l'escaneig peta, queda 'running' per detectar-ho)
     conn.execute(
@@ -151,11 +167,13 @@ def scan_drive(
     conn.execute(
         """
         UPDATE drives SET label = COALESCE(?, label), filesystem = COALESCE(?, filesystem),
-               volume_serial = COALESCE(?, volume_serial),
+               volume_serial = CASE WHEN ? THEN COALESCE(?, volume_serial)
+                                    ELSE COALESCE(volume_serial, ?) END,
                capacity_bytes = COALESCE(?, capacity_bytes), updated_utc = ?
         WHERE drive_id = ?
         """,
-        (vol["label"], vol["filesystem"], vol["volume_serial"], vol["capacity_bytes"], now, drive_id),
+        (vol["label"], vol["filesystem"], force_volume or mode == "replace", vol["volume_serial"],
+         vol["volume_serial"], vol["capacity_bytes"], now, drive_id),
     )
     cur = conn.execute(
         """
