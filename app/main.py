@@ -52,6 +52,19 @@ static_dir = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
+def _static_url(request: Request, name: str) -> str:
+    """URL d'un fitxer estàtic amb la data de modificació com a versió (evita la memòria cau antiga)."""
+    url = str(request.url_for("static", path="/" + name.lstrip("/")))
+    try:
+        version = int((static_dir / name).stat().st_mtime)
+    except OSError:
+        return url
+    return f"{url}?v={version}"
+
+
+templates.env.globals["static_url"] = _static_url
+
+
 @app.get("/")
 def index(request: Request):
     if not database_path.is_file():
@@ -101,9 +114,9 @@ def explorador_route(request: Request, conn: sqlite3.Connection = Depends(get_db
 
 @app.get("/api/explorer/roots")
 def api_explorer_roots(conn: sqlite3.Connection = Depends(get_db)):
-    """Retorna els drive_id (arrels de l'arbre)."""
+    """Retorna els discs (arrels de l'arbre) amb la fitxa resumida."""
     from app import queries_explorer
-    drives = queries_explorer.get_explorer_drive_ids(conn)
+    drives = queries_explorer.get_explorer_drives(conn)
     return {"drives": drives}
 
 
@@ -144,6 +157,23 @@ def api_explorer_contents(
     return queries_explorer.get_explorer_contents(
         conn, drive_id.strip(), path, limit=limit, offset=offset
     )
+
+
+@app.get("/api/explorer/folder-totals")
+def api_explorer_folder_totals(
+    conn: sqlite3.Connection = Depends(get_db),
+    drive_id: str = "",
+    path: str = "",
+):
+    """Totals recursius (fitxers, bytes, carpetes) de la carpeta i de les seves subcarpetes."""
+    from urllib.parse import unquote
+    from app import queries_explorer
+    if not drive_id or not drive_id.strip():
+        return {"subtree": {"files": 0, "bytes": 0, "folders": 0},
+                "direct": {"files": 0, "bytes": 0, "folders": 0}, "children": {}}
+    path = unquote(path).strip() if path else ""
+    path = queries_explorer._normalize_path(path)
+    return queries_explorer.get_explorer_folder_totals(conn, drive_id.strip(), path)
 
 
 @app.get("/discs")

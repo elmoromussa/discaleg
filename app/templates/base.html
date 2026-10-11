@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}DiscScope{% endblock %}</title>
-  <link rel="stylesheet" href="{{ request.url_for('static', path='/style.css') }}">
+  <link rel="stylesheet" href="{{ static_url(request, 'style.css') }}">
 </head>
 <body>
   <header class="site-header">
@@ -35,7 +35,7 @@
       <a href="{{ request.url_for('health') }}">Estat de la base de dades</a>
     </div>
   </footer>
-  <script src="{{ request.url_for('static', path='/app.js') }}"></script>
+  <script src="{{ static_url(request, 'app.js') }}"></script>
   <script>
     var themeToggle = document.getElementById('theme-toggle');
     if (themeToggle) {

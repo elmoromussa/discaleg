@@ -18,7 +18,7 @@ DiscScope/
 │   │   ├── dashboard.py, search.py, duplicates.py, extensions.py, folders.py, explorer.py, discs.py
 │   │   └── ...
 │   ├── templates/       # Jinja2 (base.html, dashboard, search, discs, welcome, ...)
-│   └── static/           # style.css, app.js
+│   └── static/           # style.css, app.js (tema), explorer.js (explorador)
 ├── data/                 # Ubicació de arxiu_discs.db (exclosa per .gitignore)
 ├── .gitignore             # Exclou data/, venv/, *.db, .env
 ├── README.md
@@ -63,7 +63,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 | `/duplicates` | Duplicats per nom o nom+mida (fitxers/carpetes) |
 | `/extensions` | Llistat per extensió (paginat) |
 | `/folders` | Llistat de carpetes per mida (paginat) |
-| `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre col·lapsable + contingut; sense accés al sistema de fitxers) |
+| `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre + contingut, sense accés al sistema de fitxers). Accepta `?drive=&path=` per obrir una carpeta directament. API: `/api/explorer/roots`, `/api/explorer/tree/children`, `/api/explorer/contents`, `/api/explorer/folder-totals` |
 | `/discs` | Gestió de discs: auditar i incorporar, o actualitzar un disc (formulari; missatges via query params) |
 | `/health` | JSON: database_exists, database_path |
 
@@ -73,7 +73,8 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/config.py:** `database_path` (DATABASE_PATH o default).
 - **app/db.py:** `get_db()` — obre SQLite; si el fitxer no existeix o l'esquema és antic (cal `python -m app.migrate`), retorna 503.
 - **app/queries.py:** Totes les consultes de lectura (dashboard, cerca, duplicats, extensions, folders, get_drive_ids, etc.).
-- **app/queries_explorer.py:** Consultes per a l'explorador (get_explorer_drive_ids, get_explorer_children, get_explorer_contents): arbre des de `folder_stats`, fitxers d'una carpeta per rang de l'índex únic (drive_id, relative_path).
+- **app/queries_explorer.py:** Consultes per a l'explorador (get_explorer_drives, get_explorer_children, get_explorer_contents, get_explorer_folder_totals): arbre des de `folder_stats`, fitxers d'una carpeta per rang de l'índex únic (drive_id, relative_path), totals recursius per subcarpeta en una sola passada pel rang de (drive_id, folder_path).
+- **app/static/explorer.js:** Frontend de l'explorador (arbre amb càrrega mandrosa i teclat, barra d'adreça, historial via `?drive=&path=`, ordenació, filtre, totals, paginació «carrega més», panell redimensionable).
 - **app/schema.py:** `SCHEMA_VERSION`, `init_schema`, `migrate` (v0/v1 → v2), `refresh_drive_counters`, pragmes per a escriptures massives.
 - **app/audit_to_db.py:** `scan_drive` (escaneig amb fusió update/replace), `delete_drive`, `import_from_csv_folder`, `audit_direct_to_db` (compatibilitat).
 - **app/migrate.py:** CLI de migració (`python -m app.migrate [--db] [--legacy-audits]`).
