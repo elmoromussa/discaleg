@@ -39,6 +39,12 @@ Des de **Discs** (o programàticament amb `app.audit_to_db.scan_drive`). Dos mod
   - fitxers que ja no hi són → es marquen amb `missing_since_utc` (no s'esborren).
 - **Reiniciar** (casella *Reiniciar el disc*). Esborra totes les files del disc i les torna a inserir. Es perden els hashes. Útil només si l'inventari antic és erroni.
 
+A l'arrel del volum s'ignoren `$RECYCLE.BIN` i `System Volume Information` (no formen part de l'arxiu). Els fitxers que hi havia dins, en el primer re-escaneig, quedaran marcats com a desapareguts.
+
+**Guarda contra l'arrel equivocada.** En mode actualitzar, si el disc tenia 1.000 fitxers o més i menys del 10 % apareixen al nou recorregut, l'escaneig s'atura sense tocar res. Passa típicament si s'ha triat una altra unitat, o una arrel diferent de la de l'escaneig anterior (SSD-1 i SSD-2 es van escanejar des d'una subcarpeta: `E:\REGISTRE23` i `E:\BACK_SSDEX`, no des de `E:\`). Si realment vols substituir l'inventari, usa **Reiniciar** o `--force`.
+
+**Fitxers desapareguts.** Cercar, Duplicats i Explorador només mostren fitxers presents a l'últim escaneig. A Cercar hi ha la casella *Incloure fitxers desapareguts* (opcions avançades) per trobar-ne un que ja no hi és: apareix marcat com a *(desaparegut)*.
+
 El recorregut usa `os.scandir` (a Windows mida i data venen amb el llistat, sense crides addicionals) i la fusió es fa en SQL per conjunts. Un disc d'un milió de fitxers es recorre en pocs minuts; el límit és la velocitat del disc en llistar directoris.
 
 Cada escaneig registra el serial del volum a `drives.volume_serial`. Si en un escaneig posterior el volum muntat té un serial diferent, s'atura amb un missatge (probable disc equivocat, per exemple dos discs externs que es munten a la mateixa lletra). Si realment és el mateix *drive_id* reformatat o un disc nou, usa **Reiniciar el disc** (o `--force` al CLI).

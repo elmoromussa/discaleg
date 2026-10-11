@@ -103,9 +103,9 @@
         {% endif %}
       {% else %}
         {% if mode == "name-size" %}
-        {{ g.folder_path }} — {{ g.total_bytes | format_bytes }} — {{ g.ndrives }} discs, {{ g.total_folders }} carpetes
+        {{ g.folder_path or '(arrel)' }} — {{ g.total_bytes | format_bytes }} — {{ g.ndrives }} discs, {{ g.total_folders }} carpetes
         {% else %}
-        {{ g.folder_path }} — {{ g.ndrives }} discs, {{ g.total_folders }} carpetes
+        {{ g.folder_path or '(arrel)' }} — {{ g.ndrives }} discs, {{ g.total_folders }} carpetes
         {% endif %}
       {% endif %}
     </summary>
@@ -142,7 +142,7 @@
             {% for e in g.entries %}
             <tr>
               <td>{{ e.drive_id }}</td>
-              <td class="mono">{{ e.folder_path }}</td>
+              <td class="mono">{{ e.folder_path or '(arrel)' }}</td>
               <td>{{ e.folder_depth if e.folder_depth is not none else "" }}</td>
               <td>{{ e.files_count | default(0) | int }}</td>
               <td class="bytes">{{ e.total_bytes | default(0) | int | format_bytes }}</td>

@@ -45,7 +45,7 @@
       {% for r in rows %}
       <tr>
         <td>{{ r.drive_id }}</td>
-        <td class="mono">{{ r.folder_path }}</td>
+        <td class="mono">{{ r.folder_path or '(arrel)' }}</td>
         <td>{{ r.folder_depth if r.folder_depth is not none else "" }}</td>
         <td>{{ r.files_count | default(0) | int }}</td>
         <td class="bytes">{{ r.total_bytes | default(0) | int | format_bytes }}</td>

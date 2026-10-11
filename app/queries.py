@@ -79,6 +79,7 @@ def _build_search_inventory_where(
     min_size_bytes: int,
     exclude_terms: list[str],
     extensions: list[str] | None = None,
+    include_missing: bool = False,
 ) -> tuple[str, list]:
     """Construïx WHERE per search_inventory.
     - flex_like_terms: cada terme (name OR relative_path), tots amb AND (mode «nom o ruta»).
@@ -104,6 +105,8 @@ def _build_search_inventory_where(
         main_parts.append("1 = 0")
 
     conditions = [" AND ".join(main_parts)]
+    if not include_missing:
+        conditions.append("missing_since_utc IS NULL")
     if drive_ids:
         placeholders = ",".join("?" * len(drive_ids))
         conditions.insert(0, f"drive_id IN ({placeholders})")
@@ -139,6 +142,7 @@ def search_inventory(
     name_terms: list[str] | None = None,
     path_terms: list[str] | None = None,
     flex_terms: list[str] | None = None,
+    include_missing: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """Cerca a inventory. Mode flex: cada terme en (name OR path), AND entre termes.
     Mode eixos: name_terms i path_terms es combinen amb AND (llistes buides = sense filtre en aquell eix).
@@ -167,6 +171,7 @@ def search_inventory(
         min_size_bytes,
         exclude_terms,
         extensions,
+        include_missing,
     )
     params_count = list(params)
     if sort_by and sort_by in SEARCH_INVENTORY_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):
@@ -177,7 +182,8 @@ def search_inventory(
     params.extend([limit, offset])
     cur = conn.execute(
         f"""
-        SELECT id, drive_id, relative_path, name, extension, size_bytes, modified_utc
+        SELECT id, drive_id, relative_path, name, extension, size_bytes, modified_utc,
+               missing_since_utc, hash_sha256
         FROM inventory
         WHERE {where}
         ORDER BY {order_by} LIMIT ? OFFSET ?
@@ -274,8 +280,8 @@ def _build_duplicate_files_where(
     exclude_terms: list[str],
     include_terms: list[str] | None = None,
 ) -> tuple[str, list]:
-    """Construïx la clàusula WHERE per duplicats de fitxers (inventory)."""
-    conditions: list[str] = []
+    """Construïx la clàusula WHERE per duplicats de fitxers (inventory). Només fitxers presents."""
+    conditions: list[str] = ["missing_since_utc IS NULL"]
     params: list = []
     if drive_ids:
         placeholders = ",".join("?" * len(drive_ids))
@@ -293,13 +299,13 @@ def _build_duplicate_files_where(
     for inc in include_terms:
         if not inc.strip():
             continue
-        incl = _user_to_like_pattern(inc.strip())
+        incl = _search_term_to_like_pattern(inc.strip())
         conditions.append("(name LIKE ? OR relative_path LIKE ?)")
         params.extend([incl, incl])
     for ex in exclude_terms:
         if not ex.strip():
             continue
-        excl = _user_to_like_pattern(ex.strip())
+        excl = _search_term_to_like_pattern(ex.strip())
         conditions.append("name NOT LIKE ? AND relative_path NOT LIKE ?")
         params.extend([excl, excl])
     where = " AND ".join(conditions) if conditions else "1=1"
@@ -360,7 +366,8 @@ def get_duplicate_name_files(
     cur = conn.execute(
         """
         SELECT drive_id, relative_path, name, size_bytes, modified_utc
-        FROM inventory WHERE name = ? ORDER BY drive_id, relative_path LIMIT ?
+        FROM inventory WHERE name = ? AND missing_since_utc IS NULL
+        ORDER BY drive_id, relative_path LIMIT ?
         """,
         (name, limit),
     )
@@ -420,7 +427,7 @@ def get_duplicate_name_size_files(
     cur = conn.execute(
         """
         SELECT drive_id, relative_path, name, size_bytes, modified_utc
-        FROM inventory WHERE name = ? AND size_bytes = ?
+        FROM inventory WHERE name = ? AND size_bytes = ? AND missing_since_utc IS NULL
         ORDER BY drive_id, relative_path LIMIT ?
         """,
         (name, size_bytes, limit),
@@ -453,12 +460,12 @@ def _build_duplicate_folders_where(
         if not inc.strip():
             continue
         conditions.append("folder_path LIKE ?")
-        params.append(_user_to_like_pattern(inc.strip()))
+        params.append(_search_term_to_like_pattern(inc.strip()))
     for ex in exclude_terms:
         if not ex.strip():
             continue
         conditions.append("folder_path NOT LIKE ?")
-        params.append(_user_to_like_pattern(ex.strip()))
+        params.append(_search_term_to_like_pattern(ex.strip()))
     where = " AND ".join(conditions) if conditions else "1=1"
     return where, params
 

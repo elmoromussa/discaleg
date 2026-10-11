@@ -83,6 +83,7 @@ def search_page(
         scope = "name"
     max_depth_raw = request.query_params.get("max_depth", "").strip()
     max_depth = int(max_depth_raw) if max_depth_raw.isdigit() else None
+    include_missing = request.query_params.get("include_missing", "").strip() == "1"
     min_size_mb_raw = request.query_params.get("min_size_mb", "").strip()
     try:
         min_size_mb = float(min_size_mb_raw) if min_size_mb_raw else None
@@ -169,6 +170,7 @@ def search_page(
                     name_terms=name_terms_dual,
                     path_terms=path_terms_dual,
                     flex_terms=None,
+                    include_missing=include_missing,
                 )
                 total_pages_files = max(1, ceil(total_files / PER_PAGE)) if total_files else 0
                 prev_url_files, next_url_files = _pagination_urls(
@@ -218,6 +220,7 @@ def search_page(
                     name_terms=inv_name,
                     path_terms=inv_path,
                     flex_terms=inv_flex,
+                    include_missing=include_missing,
                 )
                 total_pages_files = max(1, ceil(total_files / PER_PAGE)) if total_files else 0
                 prev_url_files, next_url_files = _pagination_urls(
@@ -271,6 +274,7 @@ def search_page(
             "scope": scope,
             "max_depth": max_depth_raw,
             "min_size_mb": min_size_mb_raw or "",
+            "include_missing": include_missing,
             "min_size_folders_mb": min_size_folders_mb_raw or "",
             "exclude": exclude_raw,
             "sort_f": sort_f,

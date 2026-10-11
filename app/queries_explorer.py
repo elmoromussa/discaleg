@@ -33,10 +33,10 @@ def _direct_children_where(parent_path: str) -> tuple[str, list[Any]]:
     - No arrel: relative_path comença per parent_path + / o \\.
     """
     if not parent_path or not _normalize_path(parent_path):
-        return ("drive_id = ?", [])
+        return ("drive_id = ? AND missing_since_utc IS NULL", [])
     p_slash, p_back = _parent_prefixes(parent_path)
     return (
-        "drive_id = ? AND (relative_path LIKE ? OR relative_path LIKE ?)",
+        "drive_id = ? AND missing_since_utc IS NULL AND (relative_path LIKE ? OR relative_path LIKE ?)",
         [p_slash, p_back],
     )
 
@@ -104,9 +104,9 @@ def get_explorer_contents(
     params: list[Any] = [drive_id]
     if folder_path:
         params.extend([prefix_slash, prefix_back])
-        where = "drive_id = ? AND (relative_path LIKE ? OR relative_path LIKE ?)"
+        where = "drive_id = ? AND missing_since_utc IS NULL AND (relative_path LIKE ? OR relative_path LIKE ?)"
     else:
-        where = "drive_id = ?"
+        where = "drive_id = ? AND missing_since_utc IS NULL"
     # Subcarpetes: noms únics de fills immediats que tenen més nivells
     cur = conn.execute(
         f"""
@@ -144,7 +144,7 @@ def get_explorer_contents(
             """
             SELECT COUNT(*)
             FROM inventory
-            WHERE drive_id = ? AND (relative_path LIKE ? OR relative_path LIKE ?)
+            WHERE drive_id = ? AND missing_since_utc IS NULL AND (relative_path LIKE ? OR relative_path LIKE ?)
               AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
               AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
             """,
@@ -155,7 +155,7 @@ def get_explorer_contents(
             """
             SELECT name, extension, size_bytes, modified_utc
             FROM inventory
-            WHERE drive_id = ? AND (relative_path LIKE ? OR relative_path LIKE ?)
+            WHERE drive_id = ? AND missing_since_utc IS NULL AND (relative_path LIKE ? OR relative_path LIKE ?)
               AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
               AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
             ORDER BY name
@@ -170,7 +170,7 @@ def get_explorer_contents(
             """
             SELECT COUNT(*)
             FROM inventory
-            WHERE drive_id = ?
+            WHERE drive_id = ? AND missing_since_utc IS NULL
               AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
             """,
             (drive_id, like_any_slash, like_any_back),
@@ -180,7 +180,7 @@ def get_explorer_contents(
             """
             SELECT name, extension, size_bytes, modified_utc
             FROM inventory
-            WHERE drive_id = ?
+            WHERE drive_id = ? AND missing_since_utc IS NULL
               AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
             ORDER BY name
             LIMIT ? OFFSET ?

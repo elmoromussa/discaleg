@@ -29,7 +29,13 @@ from app import schema
 from app.schema import NO_EXT, init_schema, utc_now_iso  # noqa: F401  (re-export)
 from app.volume_info import get_volume_info
 
-TOOL_VERSION = "discscope-scan/2.0"
+TOOL_VERSION = "discscope-scan/2.1"
+# Carpetes de sistema a l'arrel del volum que no formen part de l'arxiu (comparació en majúscules)
+EXCLUDE_ROOT_DIRS = frozenset({"$RECYCLE.BIN", "SYSTEM VOLUME INFORMATION"})
+# Guarda contra arrel/disc equivocat en mode update: si el disc tenia >= GUARD_MIN_FILES fitxers
+# i menys del GUARD_MIN_MATCH apareixen al nou recorregut, s'atura sense tocar res.
+GUARD_MIN_FILES = 1000
+GUARD_MIN_MATCH = 0.10
 CHUNK_SIZE = 20_000  # files a la taula temporal per executemany
 
 ProgressFn = Callable[[int, str], None]  # (fitxers_llegits, directori_actual)
@@ -100,6 +106,8 @@ def _walk(root: str, progress: ProgressFn | None):
                     if entry.is_symlink() or (os.name == "nt" and entry.is_junction()):
                         continue
                     if entry.is_dir(follow_symlinks=False):
+                        if not rel_dir and entry.name.upper() in EXCLUDE_ROOT_DIRS:
+                            continue
                         stack.append((entry.path, (rel_dir + sep + entry.name) if rel_dir else entry.name))
                         continue
                     st = entry.stat(follow_symlinks=False)
@@ -224,6 +232,30 @@ def scan_drive(
         flush()
         conn.commit()  # tanca la transacció implícita de les insercions a la taula temporal
 
+        # --- guarda: arrel o disc equivocat? (update sense --force)
+        if mode == "update" and not force_volume:
+            prev_present = conn.execute(
+                "SELECT COUNT(*) FROM inventory WHERE drive_id = ? AND missing_since_utc IS NULL",
+                (drive_id,),
+            ).fetchone()[0]
+            if prev_present >= GUARD_MIN_FILES:
+                matched = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM temp.scan_files s
+                    WHERE EXISTS (SELECT 1 FROM inventory i
+                                  WHERE i.drive_id = ? AND i.relative_path = s.relative_path)
+                    """,
+                    (drive_id,),
+                ).fetchone()[0]
+                if matched < GUARD_MIN_MATCH * prev_present:
+                    raise RuntimeError(
+                        f"Només {_fmt_int(matched)} dels {_fmt_int(prev_present)} fitxers coneguts de "
+                        f"«{drive_id}» apareixen sota {root}. Probablement no és el mateix disc, o l'arrel "
+                        f"no és la mateixa que a l'escaneig anterior ({prev[1] if prev else '?'}). "
+                        f"No s'ha modificat res. Revisa l'arrel, o marca «Reiniciar el disc» "
+                        f"(--force al CLI) si realment vols substituir l'inventari."
+                    )
+
         # --- fusió amb inventory (una sola transacció)
         conn.execute("BEGIN")
         files_new = files_changed = files_missing = 0
@@ -257,7 +289,7 @@ def scan_drive(
                 SELECT COUNT(*) FROM inventory i JOIN temp.scan_files s
                   ON s.relative_path = i.relative_path
                 WHERE i.drive_id = ? AND (i.size_bytes <> s.size_bytes
-                                          OR i.modified_utc IS NOT s.modified_utc)
+                                          OR substr(i.modified_utc, 1, 19) IS NOT substr(s.modified_utc, 1, 19))
                 """,
                 (drive_id,),
             ).fetchone()[0]
@@ -267,16 +299,16 @@ def scan_drive(
                 UPDATE inventory SET
                     name = s.name, extension = s.extension,
                     hash_sha256 = CASE WHEN inventory.size_bytes = s.size_bytes
-                                        AND inventory.modified_utc IS s.modified_utc
+                                        AND substr(inventory.modified_utc, 1, 19) IS substr(s.modified_utc, 1, 19)
                                        THEN inventory.hash_sha256 END,
                     hashed_utc = CASE WHEN inventory.size_bytes = s.size_bytes
-                                       AND inventory.modified_utc IS s.modified_utc
+                                       AND substr(inventory.modified_utc, 1, 19) IS substr(s.modified_utc, 1, 19)
                                       THEN inventory.hashed_utc END,
                     hash_size_bytes = CASE WHEN inventory.size_bytes = s.size_bytes
-                                            AND inventory.modified_utc IS s.modified_utc
+                                            AND substr(inventory.modified_utc, 1, 19) IS substr(s.modified_utc, 1, 19)
                                            THEN inventory.hash_size_bytes END,
                     hash_mtime_utc = CASE WHEN inventory.size_bytes = s.size_bytes
-                                           AND inventory.modified_utc IS s.modified_utc
+                                           AND substr(inventory.modified_utc, 1, 19) IS substr(s.modified_utc, 1, 19)
                                           THEN inventory.hash_mtime_utc END,
                     size_bytes = s.size_bytes, modified_utc = s.modified_utc,
                     last_seen_scan = ?, missing_since_utc = NULL

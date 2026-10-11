@@ -168,7 +168,12 @@ def main(argv: list[str] | None = None) -> int:
     where = "drive_id = ? AND hash_sha256 IS NULL AND missing_since_utc IS NULL AND size_bytes >= ?"
     params: list = [drive, args.min_size]
     if args.only_size_dupes:
-        where += " AND size_bytes IN (SELECT size_bytes FROM inventory GROUP BY size_bytes HAVING COUNT(*) > 1)"
+        # es calcula un sol cop (una passada per tota la DB), no a cada pàgina
+        conn.execute("CREATE TEMP TABLE dup_sizes (size_bytes INTEGER PRIMARY KEY) WITHOUT ROWID")
+        conn.execute("INSERT INTO temp.dup_sizes SELECT size_bytes FROM inventory "
+                     "WHERE missing_since_utc IS NULL GROUP BY size_bytes HAVING COUNT(*) > 1")
+        conn.commit()
+        where += " AND size_bytes IN (SELECT size_bytes FROM temp.dup_sizes)"
     todo_files, todo_bytes = conn.execute(
         f"SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM inventory WHERE {where}", params
     ).fetchone()

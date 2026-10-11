@@ -60,7 +60,7 @@
       {% for f in top_folders %}
       <tr>
         <td>{{ f.drive_id }}</td>
-        <td class="mono">{{ f.folder_path }}</td>
+        <td class="mono">{{ f.folder_path or '(arrel)' }}</td>
         <td>{{ f.files_count | default(0) | int }}</td>
         <td class="bytes">{{ f.total_bytes | default(0) | int | format_bytes }}</td>
       </tr>
