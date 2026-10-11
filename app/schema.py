@@ -10,6 +10,10 @@ Versió (PRAGMA user_version):
   4    idx_inventory_name substituït per un índex parcial cobridor
          (name, size_bytes, drive_id, extension) WHERE missing_since_utc IS NULL:
          els duplicats per nom i per nom+mida es resolen només amb l'índex.
+  5    folder_stats inclou totes les carpetes (també les sense fitxers directes) i té
+         índexs (drive_id, folder_depth) i (drive_id, folder_path) per a l'explorador;
+         idx_inventory_hash substituït per un índex parcial cobridor
+         (hash_sha256, size_bytes, drive_id) per als duplicats per contingut.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -22,7 +26,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Extensió canònica per a fitxers sense extensió (coincideix amb l'escàner directe).
 NO_EXT = "(no_ext)"
@@ -190,6 +194,17 @@ CREATE INDEX IF NOT EXISTS idx_inventory_name_size
 """
 
 
+# v5: explorador sobre folder_stats i duplicats per hash només amb l'índex.
+_DDL_V5_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_folder_stats_drive_depth ON folder_stats(drive_id, folder_depth);
+CREATE INDEX IF NOT EXISTS idx_folder_stats_drive_path ON folder_stats(drive_id, folder_path);
+DROP INDEX IF EXISTS idx_inventory_hash;
+CREATE INDEX IF NOT EXISTS idx_inventory_hash_size
+    ON inventory(hash_sha256, size_bytes, drive_id)
+    WHERE hash_sha256 IS NOT NULL AND missing_since_utc IS NULL;
+"""
+
+
 def _exec_statements(conn: sqlite3.Connection, sql: str) -> None:
     """Executa un bloc DDL sentència a sentència (executescript faria COMMIT implícit).
 
@@ -243,6 +258,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _exec_statements(conn, _DDL_V2_INDEXES)
         _exec_statements(conn, _DDL_V3_FTS)
         _exec_statements(conn, _DDL_V4_INDEXES)
+        _exec_statements(conn, _DDL_V5_INDEXES)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -277,6 +293,8 @@ def migrate(
         _migrate_to_v3(conn, log)
     if get_user_version(conn) < 4:
         _migrate_to_v4(conn, log)
+    if get_user_version(conn) < 5:
+        _migrate_to_v5(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -409,6 +427,53 @@ def _migrate_to_v4(conn: sqlite3.Connection, log: Callable[[str], None]) -> None
         conn.execute("ROLLBACK")
         raise
     log("  índex idx_inventory_name_size creat (idx_inventory_name eliminat)")
+
+
+def fill_missing_folders(conn: sqlite3.Connection, drive_id: str | None = None) -> int:
+    """Afegeix a folder_stats les carpetes intermèdies absents (sense fitxers directes).
+
+    Les carpetes es dedueixen dels prefixos de les rutes ja presents a folder_stats.
+    Retorna el nombre de files inserides. Cal cridar-ho dins d'una transacció.
+    """
+    params: tuple = (drive_id,) if drive_id else ()
+    where = "WHERE drive_id = ?" if drive_id else ""
+    rows = conn.execute(f"SELECT drive_id, folder_path FROM folder_stats {where}", params).fetchall()
+    have = {(d, p) for d, p in rows}
+    missing: set[tuple[str, str]] = set()
+    for d, p in rows:
+        while True:
+            i = p.rfind("\\")
+            if i < 0:
+                if p and (d, "") not in have:
+                    missing.add((d, ""))
+                break
+            p = p[:i]
+            if (d, p) in have or (d, p) in missing:
+                break
+            missing.add((d, p))
+    if missing:
+        conn.executemany(
+            "INSERT INTO folder_stats (drive_id, folder_path, folder_name, folder_depth, "
+            "files_count, total_bytes) VALUES (?, ?, ?, ?, 0, 0)",
+            [(d, p, p.rsplit("\\", 1)[-1] if p else "", p.count("\\") + 1 if p else 0)
+             for d, p in missing],
+        )
+    return len(missing)
+
+
+def _migrate_to_v5(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 5 (carpetes intermèdies, índexs d'explorador i de hash)…")
+    conn.execute("BEGIN")
+    try:
+        n = fill_missing_folders(conn)
+        log(f"  carpetes intermèdies afegides a folder_stats: {n}")
+        _exec_statements(conn, _DDL_V5_INDEXES)
+        conn.execute("PRAGMA user_version = 5")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log("  índexs creats")
 
 
 def refresh_drive_counters(

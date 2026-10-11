@@ -38,12 +38,12 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 ## Base de dades
 
 - **Ruta:** `app/config.py` — per defecte `PROJECT_ROOT / "data" / "arxiu_discs.db"`; override amb variable d’entorn `DATABASE_PATH`.
-- **Esquema versió 4** (`PRAGMA user_version = 4`, definit a `app/schema.py`; la v3 afegeix `inventory_fts`, FTS5 trigram sobre name i relative_path amb triggers de sincronització; la v4 substitueix l'índex de nom per `idx_inventory_name_size(name, size_bytes, drive_id, extension) WHERE missing_since_utc IS NULL`):
+- **Esquema versió 5** (`PRAGMA user_version = 5`, definit a `app/schema.py`; la v5 completa `folder_stats` amb les carpetes sense fitxers directes, afegeix índexs (drive_id, folder_depth) i (drive_id, folder_path) i fa cobridor l'índex de hash; la v3 afegeix `inventory_fts`, FTS5 trigram sobre name i relative_path amb triggers de sincronització; la v4 substitueix l'índex de nom per `idx_inventory_name_size(name, size_bytes, drive_id, extension) WHERE missing_since_utc IS NULL`):
 
   - **drives**: drive_id (PK), label, kind, interface, vendor, model, serial_number, volume_serial, filesystem, capacity_bytes, location, status, notes, files_count, total_bytes, hashed_files, hashed_bytes, last_root_path, last_scan_utc, created_utc, updated_utc.
   - **scans**: scan_id, drive_id, root_path, mode (update/replace), started_utc, finished_utc, status (running/done/aborted), files_count, total_bytes, files_new, files_changed, files_missing, tool_version, notes.
   - **inventory**: id, drive_id, relative_path, name, extension (`(no_ext)` si no en té), size_bytes, modified_utc, hash_sha256, hashed_utc, hash_size_bytes, hash_mtime_utc, first_seen_scan, last_seen_scan, missing_since_utc. Índexs: drive_id, (drive_id, extension), **únic (drive_id, relative_path)**, hash_sha256 (parcial), size_bytes, (name, size_bytes, drive_id, extension) parcial sobre fitxers presents.
-  - **folder_stats**: id, drive_id, folder_path (relatiu a l'arrel; `''` = arrel), folder_name, folder_depth, files_count, total_bytes. Índexs: drive_id, folder_name.
+  - **folder_stats**: id, drive_id, folder_path (relatiu a l'arrel; `''` = arrel), folder_name, folder_depth, files_count, total_bytes (fitxers directes; totes les carpetes hi són, també les buides). Índexs: drive_id, folder_name, (drive_id, folder_depth), (drive_id, folder_path).
   - **by_extension**: id, drive_id, extension, count, total_bytes. Índex: drive_id.
 
 - **Creació/actualització:** `app/schema.py` (`init_schema`, `migrate`), `app/audit_to_db.py` (`scan_drive(conn, root, drive_id, mode)`), `python -m app.migrate` per a DB antigues, `tools/hash_files.py` per als hashes. Mode WAL per poder consultar mentre s'escriu.
@@ -73,7 +73,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/config.py:** `database_path` (DATABASE_PATH o default).
 - **app/db.py:** `get_db()` — obre SQLite; si el fitxer no existeix o l'esquema és antic (cal `python -m app.migrate`), retorna 503.
 - **app/queries.py:** Totes les consultes de lectura (dashboard, cerca, duplicats, extensions, folders, get_drive_ids, etc.).
-- **app/queries_explorer.py:** Consultes per a l'explorador (get_explorer_drive_ids, get_explorer_children, get_explorer_contents); deriva l'arbre des de `inventory.relative_path`.
+- **app/queries_explorer.py:** Consultes per a l'explorador (get_explorer_drive_ids, get_explorer_children, get_explorer_contents): arbre des de `folder_stats`, fitxers d'una carpeta per rang de l'índex únic (drive_id, relative_path).
 - **app/schema.py:** `SCHEMA_VERSION`, `init_schema`, `migrate` (v0/v1 → v2), `refresh_drive_counters`, pragmes per a escriptures massives.
 - **app/audit_to_db.py:** `scan_drive` (escaneig amb fusió update/replace), `delete_drive`, `import_from_csv_folder`, `audit_direct_to_db` (compatibilitat).
 - **app/migrate.py:** CLI de migració (`python -m app.migrate [--db] [--legacy-audits]`).

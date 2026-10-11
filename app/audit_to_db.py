@@ -29,7 +29,7 @@ from app import schema
 from app.schema import NO_EXT, init_schema, utc_now_iso  # noqa: F401  (re-export)
 from app.volume_info import get_volume_info
 
-TOOL_VERSION = "discscope-scan/2.1"
+TOOL_VERSION = "discscope-scan/2.2"
 # Carpetes de sistema a l'arrel del volum que no formen part de l'arxiu (comparació en majúscules)
 EXCLUDE_ROOT_DIRS = frozenset({"$RECYCLE.BIN", "SYSTEM VOLUME INFORMATION"})
 # Guarda contra arrel/disc equivocat en mode update: si el disc tenia >= GUARD_MIN_FILES fitxers
@@ -88,8 +88,9 @@ def _extension(name: str) -> str:
 def _walk(root: str, progress: ProgressFn | None):
     """Itera (rel_dir, name, size, mtime) per a tots els fitxers regulars sota root.
 
-    Iteratiu (sense recursió), no segueix enllaços simbòlics ni junctions,
-    i continua si un directori no es pot llegir.
+    Per a cada directori (també els buits) emet abans una entrada amb name=None, perquè
+    folder_stats contingui totes les carpetes. Iteratiu (sense recursió), no segueix
+    enllaços simbòlics ni junctions, i continua si un directori no es pot llegir.
     """
     sep = os.sep
     stack: list[tuple[str, str]] = [(root, "")]
@@ -100,6 +101,7 @@ def _walk(root: str, progress: ProgressFn | None):
             it = os.scandir(abs_dir)
         except OSError:
             continue
+        yield rel_dir, None, 0, 0.0
         with it:
             for entry in it:
                 try:
@@ -183,6 +185,12 @@ def scan_drive(
         (vol["label"], vol["filesystem"], force_volume or mode == "replace", vol["volume_serial"],
          vol["volume_serial"], vol["capacity_bytes"], now, drive_id),
     )
+    # escaneigs anteriors d'aquest disc que van quedar «running» (procés tallat): tancar-los
+    conn.execute(
+        "UPDATE scans SET status = 'aborted', finished_utc = ?, notes = COALESCE(notes || ' | ', '') "
+        "|| 'tancat en iniciar un escaneig nou' WHERE drive_id = ? AND status = 'running'",
+        (now, drive_id),
+    )
     cur = conn.execute(
         """
         INSERT INTO scans (drive_id, root_path, mode, started_utc, status, tool_version, notes)
@@ -220,6 +228,9 @@ def scan_drive(
 
     try:
         for rel_dir, name, size, mtime in _walk(root, progress):
+            if name is None:
+                folder_agg[rel_dir]  # registra la carpeta encara que no tingui fitxers
+                continue
             rel = (rel_dir + sep + name) if rel_dir else name
             ext = _extension(name)
             chunk.append((rel, name, ext, size, _utc_iso(mtime)))
@@ -485,7 +496,7 @@ def import_from_csv_folder(
             conn.executemany(
                 "INSERT INTO folder_stats (drive_id, folder_path, folder_name, folder_depth, "
                 "files_count, total_bytes) VALUES (?, ?, ?, ?, ?, ?)", rows)
-            folder_count = len(rows)
+            folder_count = len(rows) + schema.fill_missing_folders(conn, drive_id)
 
         ext_count = 0
         epath = audit_dir / "by_extension.csv"

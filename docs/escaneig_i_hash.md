@@ -12,11 +12,13 @@ layout: default
 | **drives** | Una fitxa per disc (*drive_id*): etiqueta, tipus, model, serial del volum, capacitat, estat, notes, i comptadors (fitxers, bytes, fitxers amb hash, últim escaneig i arrel). |
 | **scans** | Un registre per cada escaneig: disc, arrel, mode, inici/fi, estat (`running`, `done`, `aborted`), fitxers nous/modificats/desapareguts. |
 | **inventory** | Un fitxer per fila. A més de ruta, nom, extensió, mida i data: `hash_sha256`, `hashed_utc`, mida i data en el moment del hash, `first_seen_scan`, `last_seen_scan` i `missing_since_utc`. Índex únic per (`drive_id`, `relative_path`). |
-| **folder_stats**, **by_extension** | Agregats per carpeta (ruta relativa a l'arrel escanejada) i per extensió. Es recalculen a cada escaneig. |
+| **folder_stats**, **by_extension** | Agregats per carpeta (ruta relativa a l'arrel escanejada; totes les carpetes, amb recomptes de fitxers directes) i per extensió. Es recalculen a cada escaneig. |
 
 Els fitxers sense extensió tenen `extension = '(no_ext)'`.
 
 **Versió 3: índex de text.** `inventory_fts` és un índex FTS5 amb tokenitzador *trigram* sobre nom i ruta, mantingut per triggers. La cerca de fitxers l'usa per podar candidats i després aplica el filtre exacte de sempre, així que els resultats són els mateixos però en mil·lisegons en lloc de segons. Fa créixer la DB (uns 2 GB per a 4,8 M de fitxers) i la construcció inicial tarda uns dos minuts. Fragments de menys de 3 caràcters no es poden indexar i cauen al camí lent.
+
+**Versió 5: totes les carpetes i explorador ràpid.** `folder_stats` passa a contenir totes les carpetes, també les que no tenen cap fitxer directe (abans en faltaven 143.503 de 529.179). L'Explorador es construeix sobre `folder_stats` i llegeix els fitxers d'una carpeta per rang de l'índex, així que és complet i respon en mil·lisegons sigui quin sigui el disc. L'índex de hash passa a ser cobridor per als duplicats per contingut. La migració tarda uns 10 s.
 
 **Versió 4: índex per a duplicats.** L'índex de nom se substitueix per un índex parcial cobridor sobre nom, mida, disc i extensió dels fitxers presents. Els duplicats per nom i per nom+mida es resolen recorrent només l'índex (d'uns 11 s per pàgina a uns 2 s amb 4,8 M de fitxers), i la DB només creix uns 50 MB.
 

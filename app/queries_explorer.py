@@ -1,92 +1,119 @@
-"""Consultes per a l'explorador simulat (arbre i contingut de carpetes des de la DB)."""
+"""Consultes per a l'explorador simulat (arbre i contingut de carpetes des de la DB).
+
+L'arbre de carpetes surt de `folder_stats` (una fila per carpeta, amb ruta relativa,
+nom i profunditat; des de la versió 5 inclou també les carpetes sense fitxers directes).
+Els fitxers d'una carpeta surten d'`inventory` amb un recorregut per rang de l'índex únic
+(drive_id, relative_path), així que el cost depèn de la carpeta i no de la mida del disc.
+
+A l'API les rutes van amb «/» (com les envia el frontend); a la DB amb «\\».
+"""
+from __future__ import annotations
+
 import sqlite3
 from typing import Any
 
+SEP = "\\"
+
 
 def _normalize_path(path: str) -> str:
-    """Normalitza el camí a separador / (per comparacions i respostes)."""
+    """Ruta en format API: separador «/», sense barres als extrems."""
     if not path:
         return ""
     return path.replace("\\", "/").strip("/")
 
 
+def _to_db(path: str) -> str:
+    return _normalize_path(path).replace("/", SEP)
+
+
+def _to_api(path: str) -> str:
+    return path.replace(SEP, "/")
+
+
+def _depth(db_path: str) -> int:
+    return 0 if not db_path else db_path.count(SEP) + 1
+
+
+def _range_hi(prefix: str) -> str:
+    """Límit superior (exclusiu) per a `col >= prefix AND col < hi` amb col·lació BINARY."""
+    return prefix[:-1] + chr(ord(prefix[-1]) + 1)
+
+
 def get_explorer_drive_ids(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Retorna la llista de drive_id (arrels de l'arbre)."""
-    cur = conn.execute(
-        "SELECT DISTINCT drive_id FROM inventory ORDER BY drive_id"
-    )
-    return [{"drive_id": row[0]} for row in cur.fetchall()]
+    """Discs (arrels de l'arbre), des de la fitxa de discs."""
+    cur = conn.execute("SELECT drive_id FROM drives ORDER BY drive_id")
+    rows = [{"drive_id": r[0]} for r in cur.fetchall()]
+    if rows:
+        return rows
+    cur = conn.execute("SELECT DISTINCT drive_id FROM inventory ORDER BY drive_id")
+    return [{"drive_id": r[0]} for r in cur.fetchall()]
 
 
-def _parent_prefixes(parent_path: str) -> tuple[str, str]:
-    """Retorna (prefix_slash, prefix_back) per a LIKE: fills immediats de parent_path."""
-    norm = _normalize_path(parent_path)
-    if not norm:
-        return ("", "")
-    return (norm + "/", norm + "\\")
+def _folder_direct_files(conn: sqlite3.Connection, drive_id: str, db_path: str) -> int:
+    row = conn.execute(
+        "SELECT files_count FROM folder_stats WHERE drive_id = ? AND folder_path = ? LIMIT 1",
+        (drive_id, db_path),
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
-def _direct_children_where(parent_path: str) -> tuple[str, list[Any]]:
-    """
-    Clàusula WHERE per a fitxers/carpetes "fills directes" de parent_path.
-    - Arrel (parent_path buit): tots els relative_path del drive.
-    - No arrel: relative_path comença per parent_path + / o \\.
-    """
-    if not parent_path or not _normalize_path(parent_path):
-        return ("drive_id = ? AND missing_since_utc IS NULL", [])
-    p_slash, p_back = _parent_prefixes(parent_path)
-    return (
-        "drive_id = ? AND missing_since_utc IS NULL AND (relative_path LIKE ? OR relative_path LIKE ?)",
-        [p_slash, p_back],
-    )
+def _children_folders(
+    conn: sqlite3.Connection, drive_id: str, parent_db: str, with_has_children: bool
+) -> list[dict[str, Any]]:
+    depth = _depth(parent_db) + 1
+    prefix = parent_db + SEP if parent_db else ""
+    params: list[Any] = [drive_id, depth]
+    rng = ""
+    if prefix:
+        rng = " AND folder_path >= ? AND folder_path < ?"
+        params += [prefix, _range_hi(prefix)]
+    rows = conn.execute(
+        f"""
+        SELECT folder_path, folder_name, files_count, total_bytes
+        FROM folder_stats WHERE drive_id = ? AND folder_depth = ?{rng}
+        ORDER BY folder_name COLLATE NOCASE
+        """,
+        params,
+    ).fetchall()
+
+    with_children: set[str] = set()
+    if with_has_children and rows:
+        # carpetes netes a profunditat+1 sota el mateix prefix -> quins fills tenen fills
+        gparams: list[Any] = [drive_id, depth + 1]
+        if prefix:
+            gparams += [prefix, _range_hi(prefix)]
+        plen = len(prefix)
+        for (gp,) in conn.execute(
+            f"SELECT folder_path FROM folder_stats WHERE drive_id = ? AND folder_depth = ?{rng}",
+            gparams,
+        ):
+            rest = gp[plen:]
+            i = rest.find(SEP)
+            with_children.add(prefix + (rest[:i] if i >= 0 else rest))
+
+    out: list[dict[str, Any]] = []
+    for fp, fname, files_count, total_bytes in rows:
+        out.append(
+            {
+                "name": fname or fp.rsplit(SEP, 1)[-1],
+                "path": _to_api(fp),
+                "has_children": (fp in with_children) if with_has_children else True,
+                "files_count": int(files_count or 0),
+                "total_bytes": int(total_bytes or 0),
+            }
+        )
+    return out
 
 
 def get_explorer_children(
     conn: sqlite3.Connection, drive_id: str, parent_path: str
 ) -> dict[str, Any]:
-    """
-    Retorna subcarpetes i nombre de fitxers directes per al node (drive_id, parent_path).
-    parent_path normalitzat; buit = arrel.
-    """
-    parent_path = _normalize_path(parent_path)
-    where, extra_params = _direct_children_where(parent_path)
-    params: list[Any] = [drive_id] + extra_params
-    cur = conn.execute(
-        f"""
-        SELECT relative_path, name
-        FROM inventory
-        WHERE {where}
-        LIMIT 15000
-        """,
-        params,
-    )
-    rows = cur.fetchall()
-    folder_names: set[str] = set()
-    files_count = 0
-    prefix_len = 0
-    if parent_path:
-        prefix_slash, prefix_back = _parent_prefixes(parent_path)
-        prefix_len = len(prefix_slash)  # same length as prefix_back
-    for rel_path, name in rows:
-        norm_path = _normalize_path(rel_path)
-        if parent_path:
-            if not (norm_path.startswith(parent_path + "/")):
-                continue
-            rest = norm_path[prefix_len:]
-        else:
-            rest = norm_path
-        if "/" in rest or "\\" in rest:
-            # és una carpeta (hi ha més nivells) o un fitxer dins subcarpeta
-            first = rest.split("/")[0].split("\\")[0]
-            folder_names.add(first)
-        else:
-            # fitxer directe en aquesta carpeta
-            files_count += 1
-    folders_list: list[dict[str, Any]] = []
-    for name in sorted(folder_names):
-        path = (parent_path + "/" + name) if parent_path else name
-        folders_list.append({"name": name, "path": path, "has_children": True})
-    return {"folders": folders_list, "files_count": files_count}
+    """Subcarpetes directes de (drive_id, parent_path) i nombre de fitxers directes."""
+    parent_db = _to_db(parent_path)
+    return {
+        "folders": _children_folders(conn, drive_id, parent_db, with_has_children=True),
+        "files_count": _folder_direct_files(conn, drive_id, parent_db),
+    }
 
 
 def get_explorer_contents(
@@ -96,101 +123,36 @@ def get_explorer_contents(
     limit: int = 300,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """
-    Retorna contingut de la carpeta (drive_id, folder_path): subcarpetes i fitxers paginats.
-    """
-    folder_path = _normalize_path(folder_path)
-    prefix_slash, prefix_back = _parent_prefixes(folder_path)
+    """Contingut d'una carpeta: subcarpetes i fitxers directes (paginats, ordenats per nom)."""
+    folder_db = _to_db(folder_path)
+    folders = _children_folders(conn, drive_id, folder_db, with_has_children=False)
+    prefix = folder_db + SEP if folder_db else ""
     params: list[Any] = [drive_id]
-    if folder_path:
-        params.extend([prefix_slash, prefix_back])
-        where = "drive_id = ? AND missing_since_utc IS NULL AND (relative_path LIKE ? OR relative_path LIKE ?)"
+    if prefix:
+        # rang de l'índex únic (drive_id, relative_path); fitxer directe = cap separador després del prefix
+        where = ("relative_path >= ? AND relative_path < ? "
+                 "AND instr(substr(relative_path, ?), ?) = 0")
+        params += [prefix, _range_hi(prefix), len(prefix) + 1, SEP]
     else:
-        where = "drive_id = ? AND missing_since_utc IS NULL"
-    # Subcarpetes: noms únics de fills immediats que tenen més nivells
+        where = "instr(relative_path, ?) = 0"
+        params += [SEP]
     cur = conn.execute(
         f"""
-        SELECT relative_path
+        SELECT name, extension, size_bytes, modified_utc
         FROM inventory
-        WHERE {where}
-        LIMIT 10000
+        WHERE drive_id = ? AND {where} AND missing_since_utc IS NULL
+        ORDER BY relative_path
+        LIMIT ? OFFSET ?
         """,
-        params,
+        params + [limit, offset],
     )
-    folder_names: set[str] = set()
-    prefix_len = len(prefix_slash) if folder_path else 0
-    for (rel_path,) in cur.fetchall():
-        norm = _normalize_path(rel_path)
-        if folder_path:
-            if not norm.startswith(folder_path + "/"):
-                continue
-            rest = norm[prefix_len:]
-        else:
-            rest = norm
-        if "/" in rest or "\\" in rest:
-            seg = rest.split("/")[0].split("\\")[0]
-            folder_names.add(seg)
-    folders_list = [{"name": n} for n in sorted(folder_names)]
-    # Fitxers directes: WHERE que correspongui exactament a un fitxer (sense més / o \)
-    if folder_path:
-        # relative_path ha de ser prefix_slash + name o prefix_back + name, amb name sense sep
-        like_slash = prefix_slash + "%"
-        like_back = prefix_back + "%"
-        no_more_slash = prefix_slash + "%/%"
-        no_more_back1 = prefix_slash + "%\\%"
-        no_more_back2 = prefix_back + "%/%"
-        no_more_back3 = prefix_back + "%\\%"
-        cur_count = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM inventory
-            WHERE drive_id = ? AND missing_since_utc IS NULL AND (relative_path LIKE ? OR relative_path LIKE ?)
-              AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
-              AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
-            """,
-            (drive_id, like_slash, like_back, no_more_slash, no_more_back1, no_more_back2, no_more_back3),
-        )
-        total_files = cur_count.fetchone()[0]
-        cur_files = conn.execute(
-            """
-            SELECT name, extension, size_bytes, modified_utc
-            FROM inventory
-            WHERE drive_id = ? AND missing_since_utc IS NULL AND (relative_path LIKE ? OR relative_path LIKE ?)
-              AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
-              AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
-            ORDER BY name
-            LIMIT ? OFFSET ?
-            """,
-            (drive_id, like_slash, like_back, no_more_slash, no_more_back1, no_more_back2, no_more_back3, limit, offset),
-        )
-    else:
-        like_any_slash = "%/%"
-        like_any_back = "%\\%"
-        cur_count = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM inventory
-            WHERE drive_id = ? AND missing_since_utc IS NULL
-              AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
-            """,
-            (drive_id, like_any_slash, like_any_back),
-        )
-        total_files = cur_count.fetchone()[0]
-        cur_files = conn.execute(
-            """
-            SELECT name, extension, size_bytes, modified_utc
-            FROM inventory
-            WHERE drive_id = ? AND missing_since_utc IS NULL
-              AND relative_path NOT LIKE ? AND relative_path NOT LIKE ?
-            ORDER BY name
-            LIMIT ? OFFSET ?
-            """,
-            (drive_id, like_any_slash, like_any_back, limit, offset),
-        )
-    files_list = [dict(row) for row in cur_files]
+    files = [dict(row) for row in cur.fetchall()]
+    total_files = _folder_direct_files(conn, drive_id, folder_db)
+    if files and offset + len(files) > total_files:
+        total_files = offset + len(files)  # folder_stats desactualitzat: confia en el que s'ha llegit
     return {
-        "folders": folders_list,
-        "files": files_list,
+        "folders": [{"name": f["name"], "path": f["path"]} for f in folders],
+        "files": files,
         "total_files": total_files,
-        "has_more": (offset + len(files_list)) < total_files,
+        "has_more": (offset + len(files)) < total_files and len(files) == limit,
     }

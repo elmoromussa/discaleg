@@ -357,6 +357,30 @@ def _build_duplicate_files_where(
     return where, params
 
 
+def _paged_groups(
+    conn: sqlite3.Connection, grouped_sql: str, params: list, order_by: str, limit: int, offset: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Pàgina d'un SELECT agrupat amb el total de grups en la mateixa passada (COUNT(*) OVER ()).
+
+    Evita recórrer l'índex dues vegades (una per la pàgina i una per comptar).
+    """
+    cur = conn.execute(
+        f"SELECT *, COUNT(*) OVER () AS _total_groups FROM ({grouped_sql}) "
+        f"ORDER BY {order_by} LIMIT ? OFFSET ?",
+        params + [limit, offset],
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    if rows:
+        total = int(rows[0].pop("_total_groups"))
+        for r in rows[1:]:
+            r.pop("_total_groups", None)
+        return rows, total
+    if offset == 0:
+        return [], 0
+    total = conn.execute(f"SELECT COUNT(*) FROM ({grouped_sql})", params).fetchone()[0]
+    return [], int(total)
+
+
 DUPLICATE_NAMES_SORT_COLUMNS = ("name", "ndrives", "total_files")
 DUPLICATE_HASH_SORT_COLUMNS = ("wasted_bytes", "size_bytes", "ndrives", "total_files")
 DUPLICATE_NAME_SIZE_SORT_COLUMNS = ("name", "size_bytes", "ndrives", "total_files")
@@ -387,22 +411,9 @@ def get_duplicate_names_groups(
         order_by = f"{sort_by} {order_dir}, total_files DESC"
     else:
         order_by = "total_files DESC"
-    cur = conn.execute(
-        f"""
-        SELECT name, COUNT(DISTINCT drive_id) AS ndrives, COUNT(*) AS total_files
-        {base_sql}
-        GROUP BY name HAVING COUNT(DISTINCT drive_id) > 1
-        ORDER BY {order_by} LIMIT ? OFFSET ?
-        """,
-        params + [limit, offset],
-    )
-    groups = [dict(row) for row in cur.fetchall()]
-    cur_total = conn.execute(
-        f"SELECT COUNT(*) FROM (SELECT name {base_sql} GROUP BY name HAVING COUNT(DISTINCT drive_id) > 1)",
-        params,
-    )
-    total = cur_total.fetchone()[0]
-    return groups, total
+    grouped = f"""SELECT name, COUNT(DISTINCT drive_id) AS ndrives, COUNT(*) AS total_files
+        {base_sql} GROUP BY name HAVING COUNT(DISTINCT drive_id) > 1"""
+    return _paged_groups(conn, grouped, params, order_by, limit, offset)
 
 
 def get_duplicate_hash_groups(
@@ -436,19 +447,11 @@ def get_duplicate_hash_groups(
         order_by = f"{sort_by} {order_dir}, total_files DESC"
     else:
         order_by = "wasted_bytes DESC, total_files DESC"
-    cur = conn.execute(
-        f"""
-        SELECT hash_sha256, MIN(size_bytes) AS size_bytes, MIN(name) AS name,
+    grouped = f"""SELECT hash_sha256, MIN(size_bytes) AS size_bytes, MIN(name) AS name,
                COUNT(DISTINCT drive_id) AS ndrives, COUNT(*) AS total_files,
                MIN(size_bytes) * (COUNT(*) - 1) AS wasted_bytes
-        {base_sql}
-        ORDER BY {order_by} LIMIT ? OFFSET ?
-        """,
-        params + [limit, offset],
-    )
-    groups = [dict(row) for row in cur.fetchall()]
-    total = conn.execute(f"SELECT COUNT(*) FROM (SELECT 1 {base_sql})", params).fetchone()[0]
-    return groups, total
+        {base_sql}"""
+    return _paged_groups(conn, grouped, params, order_by, limit, offset)
 
 
 def get_duplicate_hash_files(
@@ -517,27 +520,9 @@ def get_duplicate_name_size_groups(
         order_by = f"{sort_by} {order_dir}, total_files DESC"
     else:
         order_by = "total_files DESC"
-    cur = conn.execute(
-        f"""
-        SELECT name, size_bytes, COUNT(DISTINCT drive_id) AS ndrives, COUNT(*) AS total_files
-        {base_sql}
-        GROUP BY name, size_bytes HAVING COUNT(DISTINCT drive_id) > 1
-        ORDER BY {order_by} LIMIT ? OFFSET ?
-        """,
-        params + [limit, offset],
-    )
-    groups = [dict(row) for row in cur.fetchall()]
-    cur_total = conn.execute(
-        f"""
-        SELECT COUNT(*) FROM (
-            SELECT name, size_bytes {base_sql}
-            GROUP BY name, size_bytes HAVING COUNT(DISTINCT drive_id) > 1
-        )
-        """,
-        params,
-    )
-    total = cur_total.fetchone()[0]
-    return groups, total
+    grouped = f"""SELECT name, size_bytes, COUNT(DISTINCT drive_id) AS ndrives, COUNT(*) AS total_files
+        {base_sql} GROUP BY name, size_bytes HAVING COUNT(DISTINCT drive_id) > 1"""
+    return _paged_groups(conn, grouped, params, order_by, limit, offset)
 
 
 def get_duplicate_name_size_files(
@@ -562,8 +547,8 @@ def _build_duplicate_folders_where(
     exclude_terms: list[str],
     include_terms: list[str] | None = None,
 ) -> tuple[str, list]:
-    """Construïx la clàusula WHERE per duplicats de carpetes (folder_stats)."""
-    conditions: list[str] = []
+    """Construïx la clàusula WHERE per duplicats de carpetes (folder_stats). Només carpetes amb fitxers directes."""
+    conditions: list[str] = ["files_count > 0"]
     params: list = []
     if drive_ids:
         placeholders = ",".join("?" * len(drive_ids))

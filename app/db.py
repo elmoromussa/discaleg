@@ -2,7 +2,7 @@
 import sqlite3
 from collections.abc import Generator
 
-from fastapi import Depends, HTTPException
+from fastapi import HTTPException
 
 from app import schema
 from app.config import database_path
