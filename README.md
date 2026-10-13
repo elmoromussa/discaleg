@@ -1,4 +1,4 @@
-# DiscScope — Inventari de discs (aplicació web)
+# Discàleg — Inventari de discs (aplicació web)
 
 Aplicació web local per consultar i visualitzar la base de dades d'inventari de discs (`arxiu_discs.db`). Permet veure resums per disc, cercar per paraula clau, detectar duplicats per nom o nom+mida, llistar extensions i carpetes, i explorar l'inventari amb un **explorador simulat** (arbre de carpetes i fitxers des de la base de dades, sense accés al sistema de fitxers). La base de dades es pot crear i omplir des de la mateixa aplicació (secció **Discs**), auditant carpetes o discs directament sense fitxers CSV intermedis.
 
@@ -81,11 +81,11 @@ L’aplicació pot arrencar **sense cap fitxer de base de dades**. En aquest cas
 
 ## Documentació
 
-La carpeta **`docs/`** conté la documentació en format Markdown. Si actives **GitHub Pages** al repositori (Settings → Pages → Deploy from a branch → branch **main**, carpeta **/docs**), es publicarà a `https://elmoromussa.github.io/discscope/`. Instruccions detallades: [docs/CONFIGURAR_GITHUB.md](docs/CONFIGURAR_GITHUB.md).
+La carpeta **`docs/`** conté la documentació en format Markdown. Si actives **GitHub Pages** al repositori (Settings → Pages → Deploy from a branch → branch **main**, carpeta **/docs**), es publicarà a `https://elmoromussa.github.io/discaleg/`. Instruccions detallades: [docs/CONFIGURAR_GITHUB.md](docs/CONFIGURAR_GITHUB.md).
 
 ## Git i GitHub
 
-El fitxer `.gitignore` exclou `data/`, `venv/`, `*.db` i `.env`, de manera que en fer push no es pugen dades personals ni l'entorn virtual. Nom recomanat per al repositori: **DiscScope** (o `discscope` en minúscules). Per instruccions per pujar el projecte a GitHub, vegeu la guia a continuació.
+El fitxer `.gitignore` exclou `data/`, `venv/`, `*.db` i `.env`, de manera que en fer push no es pugen dades personals ni l'entorn virtual. Nom recomanat per al repositori: **Discàleg** (o `discaleg` en minúscules). Per instruccions per pujar el projecte a GitHub, vegeu la guia a continuació.
 
 ## Notes
 

@@ -1,5 +1,5 @@
 ---
-title: Instal·lació — DiscScope
+title: Instal·lació — Discàleg
 layout: default
 ---
 
@@ -15,8 +15,8 @@ layout: default
 ### 1. Clonar o descomprimir el projecte
 
 ```bash
-git clone https://github.com/elmoromussa/discscope.git
-cd discscope
+git clone https://github.com/elmoromussa/discaleg.git
+cd discaleg
 ```
 
 ### 2. Crear l'entorn virtual (recomanat)

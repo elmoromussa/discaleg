@@ -1,5 +1,5 @@
 ---
-title: Ús i flux de treball — DiscScope
+title: Ús i flux de treball — Discàleg
 layout: default
 ---
 

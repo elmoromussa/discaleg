@@ -29,7 +29,7 @@ from app import schema
 from app.schema import NO_EXT, init_schema, utc_now_iso  # noqa: F401  (re-export)
 from app.volume_info import get_volume_info
 
-TOOL_VERSION = "discscope-scan/2.2"
+TOOL_VERSION = "discaleg-scan/2.3"
 # Carpetes de sistema a l'arrel del volum que no formen part de l'arxiu (comparació en majúscules)
 EXCLUDE_ROOT_DIRS = frozenset({"$RECYCLE.BIN", "SYSTEM VOLUME INFORMATION"})
 # Guarda contra arrel/disc equivocat en mode update: si el disc tenia >= GUARD_MIN_FILES fitxers

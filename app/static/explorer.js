@@ -1,5 +1,5 @@
 /**
- * DiscScope — Explorador simulat (arbre + llistat) sobre l'API /api/explorer/* i /api/spaces/*.
+ * Discàleg — Explorador simulat (arbre + llistat) sobre l'API /api/explorer/* i /api/spaces/*.
  *
  * Convencions seguides (Windows Explorer / Finder / patró Tree View de WAI-ARIA):
  *  - arbre lateral amb càrrega mandrosa, xebró per plegar/desplegar, nom per obrir;
@@ -18,7 +18,7 @@
   'use strict';
 
   var PAGE_SIZE = 300;
-  var SIDEBAR_KEY = 'discscope-explorer-sidebar';
+  var SIDEBAR_KEY = 'discaleg-explorer-sidebar';
   var API = {
     roots: '/api/explorer/roots',
     children: '/api/explorer/tree/children',
@@ -779,7 +779,7 @@
     state.drive = null;
     state.path = '';
     if (!same) pushHistory({ tag: tag.tag_id }, buildTagUrl(tag.tag_id), opts);
-    document.title = tag.name + ' — Etiquetes — Explorador — DiscScope';
+    document.title = tag.name + ' — Etiquetes — Explorador — Discàleg';
     updateNavButtons();
     renderAddress();
     loadSpaceContents();
@@ -797,7 +797,7 @@
     state.path = path;
     if (!same) pushHistory({ drive: drive, path: path }, buildUrl(drive, path), opts);
     else if (opts.replace) pushHistory({ drive: drive, path: path }, buildUrl(drive, path), { push: false, replace: true });
-    document.title = (path ? baseName(path) + ' — ' : '') + drive + ' — Explorador — DiscScope';
+    document.title = (path ? baseName(path) + ' — ' : '') + drive + ' — Explorador — Discàleg';
     updateNavButtons();
     renderAddress();
     loadContents();
@@ -817,7 +817,7 @@
     state.drive = null;
     state.path = '';
     if (!same) pushHistory({ space: spaceId }, buildSpaceUrl(spaceId), opts);
-    document.title = space.name + ' — Espais — Explorador — DiscScope';
+    document.title = space.name + ' — Espais — Explorador — Discàleg';
     updateNavButtons();
     renderAddress();
     loadSpaceContents();

@@ -1,5 +1,5 @@
 ---
-title: Escaneig, actualització i hash — DiscScope
+title: Escaneig, actualització i hash — Discàleg
 layout: default
 ---
 

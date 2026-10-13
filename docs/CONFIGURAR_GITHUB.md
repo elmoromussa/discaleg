@@ -6,7 +6,7 @@ Aquest document indica què posar a la secció **About** del repo i com activar 
 
 ## 1. Secció About (descripció i topics)
 
-A la pàgina del repositori [github.com/elmoromussa/discscope](https://github.com/elmoromussa/discscope):
+A la pàgina del repositori [github.com/elmoromussa/discaleg](https://github.com/elmoromussa/discaleg):
 
 1. A la columna de la dreta, clica la **pinyeta** al costat de "About".
 2. **Description:** enganxa aquest text (o adapta’l):
@@ -34,6 +34,6 @@ A la pàgina del repositori [github.com/elmoromussa/discscope](https://github.co
 
 En uns minuts la documentació estarà disponible a:
 
-**https://elmoromussa.github.io/discscope/**
+**https://elmoromussa.github.io/discaleg/**
 
 Pots afegir aquest enllaç a la descripció del repo (camp **Website** de la secció About) si vols.

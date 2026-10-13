@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ========================================
-echo   DiscScope - Execucio rapida
+echo   Discaleg - Execucio rapida
 echo ========================================
 echo.
 echo Projecte (aquesta instancia): %CD%

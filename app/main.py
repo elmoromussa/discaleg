@@ -24,7 +24,7 @@ def _format_bytes(value: int | None) -> str:
     return f"{value:.1f} PB"
 
 
-app = FastAPI(title="DiscScope", description="Inventari de discs — consulta i visualització de arxiu_discs.db")
+app = FastAPI(title="Discàleg", description="Inventari de discs — consulta i visualització de arxiu_discs.db")
 
 
 @app.exception_handler(Exception)

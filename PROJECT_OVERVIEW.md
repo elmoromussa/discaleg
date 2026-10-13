@@ -1,11 +1,11 @@
-# DiscScope — Visió general del projecte
+# Discàleg — Visió general del projecte
 
 Document de referència per recuperar el context del projecte en futurs xats.
 
 ## Estructura del projecte
 
 ```
-DiscScope/
+Discàleg/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py           # Entrada FastAPI, rutes, Jinja2

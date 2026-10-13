@@ -1,5 +1,5 @@
 ---
-title: Configuració — DiscScope
+title: Configuració — Discàleg
 layout: default
 ---
 
@@ -7,7 +7,7 @@ layout: default
 
 ## Ubicació de la base de dades
 
-Per defecte DiscScope busca la base de dades a:
+Per defecte Discàleg busca la base de dades a:
 
 ```
 <directori del projecte>/data/arxiu_discs.db

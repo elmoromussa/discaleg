@@ -1,11 +1,11 @@
 ---
-title: DiscScope — Documentació
+title: Discàleg — Documentació
 layout: default
 ---
 
-# DiscScope — Documentació
+# Discàleg — Documentació
 
-**DiscScope** és una aplicació web local per mantenir i consultar l'inventari dels teus discs i carpetes. Audita directoris, desa les dades en una base SQLite i permet cercar, detectar duplicats, veure estadístiques per extensió i carpetes, i explorar tot l'arxiu des del navegador.
+**Discàleg** és una aplicació web local per mantenir i consultar l'inventari dels teus discs i carpetes. Audita directoris, desa les dades en una base SQLite i permet cercar, detectar duplicats, veure estadístiques per extensió i carpetes, i explorar tot l'arxiu des del navegador.
 
 ## Inici ràpid
 
@@ -25,5 +25,5 @@ layout: default
 
 ## Enllaços
 
-- **Repositori:** [github.com/elmoromussa/discscope](https://github.com/elmoromussa/discscope)
-- **README:** [README principal del projecte](https://github.com/elmoromussa/discscope/blob/main/README.md)
+- **Repositori:** [github.com/elmoromussa/discaleg](https://github.com/elmoromussa/discaleg)
+- **README:** [README principal del projecte](https://github.com/elmoromussa/discaleg/blob/main/README.md)

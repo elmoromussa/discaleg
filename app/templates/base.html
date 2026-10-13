@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}DiscScope{% endblock %}</title>
+  <title>{% block title %}Discàleg{% endblock %}</title>
   <link rel="stylesheet" href="{{ static_url(request, 'style.css') }}">
 </head>
 <body>
   <header class="site-header">
     <div class="header-inner container">
-      <h1 class="site-title"><a href="{{ request.url_for('index') }}">DiscScope</a></h1>
+      <h1 class="site-title"><a href="{{ request.url_for('index') }}">Discàleg</a></h1>
       <div class="header-actions">
         <button type="button" class="btn btn-theme" id="theme-toggle" title="Canviar tema">Tema</button>
         <nav class="site-nav">
@@ -32,7 +32,7 @@
   </main>
   <footer class="site-footer">
     <div class="container">
-      <span>DiscScope</span>
+      <span>Discàleg</span>
       <a href="{{ request.url_for('health') }}">Estat de la base de dades</a>
     </div>
   </footer>
