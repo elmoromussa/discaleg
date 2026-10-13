@@ -176,6 +176,55 @@ def api_explorer_folder_totals(
     return queries_explorer.get_explorer_folder_totals(conn, drive_id.strip(), path)
 
 
+@app.get("/api/spaces/tree")
+def api_spaces_tree(conn: sqlite3.Connection = Depends(get_db)):
+    """Arbre complet dels espais virtuals (i la llista plana amb profunditat)."""
+    from app.routes import spaces
+    return spaces.api_tree(conn)
+
+
+@app.post("/api/spaces")
+async def api_spaces_create(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Crea un espai: {name, kind: smart|manual, parent_id?, query?, description?}."""
+    from app.routes import spaces
+    return await spaces.api_create(request, conn)
+
+
+@app.patch("/api/spaces/{space_id}")
+async def api_spaces_update(space_id: int, request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Modifica nom, pare, criteris o descripció d'un espai."""
+    from app.routes import spaces
+    return await spaces.api_update(request, conn, space_id)
+
+
+@app.delete("/api/spaces/{space_id}")
+def api_spaces_delete(space_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    """Esborra un espai i els seus descendents."""
+    from app.routes import spaces
+    return spaces.api_delete(conn, space_id)
+
+
+@app.get("/api/spaces/{space_id}/contents")
+def api_spaces_contents(
+    space_id: int,
+    conn: sqlite3.Connection = Depends(get_db),
+    limit: int = 300,
+    offset: int = 0,
+    sort: str = "",
+    dir: str = "",
+):
+    """Contingut d'un espai: una pàgina de fitxers (cerca desada) i el total."""
+    from app.routes import spaces
+    return spaces.api_contents(conn, space_id, limit, offset, sort, dir)
+
+
+@app.post("/spaces/desa", name="spaces_save")
+async def spaces_save(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Desa la cerca actual de Cercar com a espai (o actualitza'n un) i obre l'explorador."""
+    from app.routes import spaces
+    return await spaces.save_from_search(request, conn)
+
+
 @app.get("/api/explorer/export.csv", name="explorer_export")
 def api_explorer_export(drive_id: str = "", path: str = "", recursive: int = 1):
     """Exporta els fitxers d'una carpeta a CSV (UTF-8 amb BOM, separador «;») en streaming.

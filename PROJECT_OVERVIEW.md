@@ -13,9 +13,11 @@ DiscScope/
 │   ├── db.py             # get_db() — connexió SQLite per petició
 │   ├── queries.py        # Consultes SQL (dashboard, cerca, duplicats, extensions, folders)
 │   ├── queries_explorer.py # Consultes per a l'explorador simulat (arbre i contingut des de inventory)
+│   ├── queries_spaces.py # Espais virtuals: arbre jeràrquic, CRUD, contingut de les cerques desades
+│   ├── search_params.py  # Paràmetres de cerca normalitzats i execució (Cercar i espais intel·ligents)
 │   ├── audit_to_db.py    # Esquema + audit directe a DB (sense CSV intermedis)
 │   ├── routes/
-│   │   ├── dashboard.py, search.py, duplicates.py, extensions.py, folders.py, explorer.py, discs.py
+│   │   ├── dashboard.py, search.py, duplicates.py, extensions.py, folders.py, explorer.py, discs.py, spaces.py
 │   │   └── ...
 │   ├── templates/       # Jinja2 (base.html, dashboard, search, discs, welcome, ...)
 │   └── static/           # style.css, app.js (tema), explorer.js (explorador)
@@ -68,6 +70,8 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 | `/extensions` | Llistat per extensió (paginat) |
 | `/folders` | Llistat de carpetes per mida (paginat) |
 | `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre + contingut, sense accés al sistema de fitxers). Accepta `?drive=&path=` per obrir una carpeta directament. API: `/api/explorer/roots`, `/api/explorer/tree/children`, `/api/explorer/contents`, `/api/explorer/folder-totals`, `/api/explorer/export.csv?drive_id=&path=&recursive=` (CSV en streaming, UTF-8 amb BOM, separador «;»). Menú contextual (clic dret, botó ⋯ o Maj+F10) amb cerca dins la carpeta, exportació CSV, còpies d'un fitxer i copiar la ruta |
+| `/api/spaces/tree`, `POST /api/spaces`, `PATCH`/`DELETE /api/spaces/{id}`, `/api/spaces/{id}/contents` | Espais virtuals (JSON): arbre, creació, canvi de nom/pare/criteris, esborrat en cascada, i contingut paginat i ordenat al servidor d'una cerca desada |
+| `POST /spaces/desa` | Formulari «Desa com a espai» de Cercar: crea (o actualitza, amb `space_id`) una cerca desada i redirigeix a `/explorador?space=ID` |
 | `/discs` | Gestió de discs: auditar i incorporar, actualitzar o eliminar un disc, i editar-ne la fitxa (etiqueta, tipus, ubicació, notes; `POST /discs/fitxa`) |
 | `/discs/{drive_id}/canvis` | Què ha canviat en cada escaneig del disc: pestanyes de fitxers nous, modificats (mida i data abans/després) i desapareguts, paginades, des de `scan_changes`; `?scan=&tipus=new|changed|missing&page=` |
 | `/health` | JSON: database_exists, database_path |
@@ -79,7 +83,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/db.py:** `get_db()` — obre SQLite; si el fitxer no existeix o l'esquema és antic (cal `python -m app.migrate`), retorna 503.
 - **app/queries.py:** Totes les consultes de lectura (dashboard, cerca, duplicats, extensions, folders, get_drive_ids, etc.).
 - **app/queries_explorer.py:** Consultes per a l'explorador (get_explorer_drives, get_explorer_children, get_explorer_contents, get_explorer_folder_totals): arbre des de `folder_stats`, fitxers d'una carpeta per rang de l'índex únic (drive_id, relative_path), totals recursius per subcarpeta en una sola passada pel rang de (drive_id, folder_path).
-- **app/static/explorer.js:** Frontend de l'explorador (arbre amb càrrega mandrosa i teclat, barra d'adreça, historial via `?drive=&path=`, ordenació, filtre, totals, paginació «carrega més», panell redimensionable, menú contextual `role=menu` amb teclat i files del llistat navegables amb fletxes).
+- **app/static/explorer.js:** Frontend de l'explorador (arbre amb càrrega mandrosa i teclat, barra d'adreça, historial via `?drive=&path=` o `?space=`, ordenació, filtre, totals, paginació «carrega més», panell redimensionable, menú contextual `role=menu` amb teclat i files del llistat navegables amb fletxes). Dos modes: carpeta d'un disc i espai virtual (panell «Espais» sota «Discs»: arbre jeràrquic, columnes Disc i Carpeta, ordenació al servidor, accions de la barra d'eines: edita els criteris, reanomena, mou a, elimina; botó + per crear espais).
 - **app/schema.py:** `SCHEMA_VERSION`, `DRIVE_KINDS` (tipus de suport i etiqueta en català), `init_schema`, `migrate` (pas a pas fins a la versió actual), `refresh_drive_counters`, pragmes per a escriptures massives.
 - **app/audit_to_db.py:** `scan_drive` (escaneig amb fusió update/replace), `delete_drive`, `import_from_csv_folder`, `audit_direct_to_db` (compatibilitat).
 - **app/migrate.py:** CLI de migració (`python -m app.migrate [--db] [--legacy-audits]`).
@@ -87,7 +91,9 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/volume_info.py:** etiqueta, sistema de fitxers, serial i capacitat del volum (Windows via ctypes).
 - **tools/hash_files.py:** CLI de hash SHA-256 incremental per disc.
 - **app/routes/explorer.py:** Pàgina Explorador (GET /explorador; requereix DB).
-- **app/routes/search.py:** `parse_search_params` normalitza els paràmetres de cerca en un diccionari pla (el format de les cerques desades), `run_file_search` / `run_folder_search` els executen; la pàgina hi afegeix paginació.
+- **app/search_params.py:** `parse_search_params` normalitza els paràmetres de cerca en un diccionari pla i serialitzable (el `query_json` de les cerques desades), `run_file_search` / `run_folder_search` els executen. Ho fan servir la pàgina Cercar i els espais intel·ligents.
+- **app/queries_spaces.py:** espais virtuals: `list_spaces`/`build_tree`/`flatten_tree`, `create_space`, `update_space` (valida pare i cicles), `delete_space` (CTE recursiu: descendents i pertinences, sense dependre de les claus foranes), `get_smart_contents` (executa la cerca desada amb ordenació i paginació).
+- **app/routes/spaces.py:** API JSON dels espais i formulari «Desa com a espai».
 - **app/routes/discs.py:** Pàgina Discs (GET sense DB opcional per llista; POST escaneig en segon pla; `discs_card_post` desa la fitxa del disc; `scan_changes_page` mostra els canvis per escaneig). L'escaneig només omple l'etiqueta del disc si és buida: la que escriu l'usuari a la fitxa es conserva.
 
 ## Comportament sense DB

@@ -1,13 +1,18 @@
 /**
- * DiscScope — Explorador simulat (arbre + llistat) sobre l'API /api/explorer/*.
+ * DiscScope — Explorador simulat (arbre + llistat) sobre l'API /api/explorer/* i /api/spaces/*.
  *
  * Convencions seguides (Windows Explorer / Finder / patró Tree View de WAI-ARIA):
  *  - arbre lateral amb càrrega mandrosa, xebró per plegar/desplegar, nom per obrir;
  *  - l'arbre segueix sempre la carpeta que es mostra (es desplega i s'hi selecciona);
  *  - barra d'adreça amb segments clicables, Enrere/Endavant/Amunt, ruta copiable;
- *  - l'URL (?drive=…&path=…) reflecteix la carpeta: es pot compartir i «Enrere» del navegador funciona;
- *  - teclat: fletxes a l'arbre, Retorn per obrir, Alt+↑ o Retrocés per pujar;
+ *  - l'URL (?drive=…&path=… o ?space=…) reflecteix el que es mostra: es pot compartir i
+ *    «Enrere» del navegador funciona;
+ *  - teclat: fletxes a l'arbre i al llistat, Retorn per obrir, Alt+↑ o Retrocés per pujar,
+ *    Maj+F10 o clic dret per al menú d'accions;
  *  - llistat amb carpetes primer, ordenació per columna, filtre per nom i totals recursius.
+ *
+ * Dos modes: «folder» (una carpeta d'un disc) i «space» (un espai virtual: cerca desada o
+ * col·lecció, amb fitxers de qualsevol disc; columnes Disc i Carpeta, ordenació al servidor).
  */
 (function () {
   'use strict';
@@ -18,7 +23,9 @@
     roots: '/api/explorer/roots',
     children: '/api/explorer/tree/children',
     contents: '/api/explorer/contents',
-    totals: '/api/explorer/folder-totals'
+    totals: '/api/explorer/folder-totals',
+    spacesTree: '/api/spaces/tree',
+    spaces: '/api/spaces'
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -29,16 +36,28 @@
     tree: $('explorer-tree'),
     treeLoading: $('explorer-tree-loading'),
     treeEmpty: $('explorer-tree-empty'),
+    spaces: $('explorer-spaces'),
+    spacesEmpty: $('explorer-spaces-empty'),
+    spaceNew: $('explorer-space-new'),
+    spaceActions: $('explorer-space-actions'),
+    spaceEdit: $('explorer-space-edit'),
+    spaceRename: $('explorer-space-rename'),
+    spaceMove: $('explorer-space-move'),
+    spaceDelete: $('explorer-space-delete'),
     splitter: $('explorer-splitter'),
     back: $('explorer-back'),
     forward: $('explorer-forward'),
     up: $('explorer-up'),
     address: $('explorer-address'),
     copy: $('explorer-copy'),
+    actions: $('explorer-actions'),
     filter: $('explorer-filter-input'),
     list: $('explorer-list'),
     welcome: $('explorer-welcome'),
     emptyFolder: $('explorer-empty-folder'),
+    emptySpace: $('explorer-empty-space'),
+    emptySpaceText: $('explorer-empty-space-text'),
+    emptySpaceHint: $('explorer-empty-space-hint'),
     noMatch: $('explorer-no-match'),
     error: $('explorer-error'),
     loading: $('explorer-loading'),
@@ -47,20 +66,24 @@
     status: $('explorer-status'),
     statusPages: $('explorer-status-pages'),
     loadMore: $('explorer-load-more'),
-    toast: $('explorer-toast')
+    toast: $('explorer-toast'),
+    menu: $('explorer-menu')
   };
 
   var searchUrl = root.getAttribute('data-search-url') || '/search';
   var duplicatesUrl = root.getAttribute('data-duplicates-url') || '/duplicates';
   var exportUrl = root.getAttribute('data-export-url') || '/api/explorer/export.csv';
-  els.actions = $('explorer-actions');
-  els.menu = $('explorer-menu');
 
   var state = {
+    mode: 'folder',        // 'folder' | 'space'
     drives: {},            // drive_id -> fitxa
     drive: null,
     path: '',
-    rows: [],              // elements carregats de la carpeta actual
+    space: null,           // espai obert (mode space)
+    spaceAncestors: [],
+    spacesById: {},        // space_id -> espai (de l'arbre)
+    spacesTree: [],
+    rows: [],              // elements carregats
     totals: null,          // resposta de /folder-totals per a la carpeta actual
     sort: { key: 'name', dir: 'asc' },
     filter: '',
@@ -73,7 +96,8 @@
     histMax: 0
   };
 
-  var nodes = {};          // clau drive\0path -> node de l'arbre
+  var nodes = {};          // clau drive\0path -> node de l'arbre de discs
+  var spaceNodes = {};     // space_id -> node de l'arbre d'espais
 
   // ------------------------------------------------------------------ utilitats
 
@@ -111,8 +135,16 @@
     return i < 0 ? path : path.slice(i + 1);
   }
 
-  function fetchJson(url) {
-    return fetch(url, { headers: { Accept: 'application/json' } }).then(function (r) {
+  function joinPath(parent, name) { return parent ? parent + '/' + name : name; }
+
+  function fetchJson(url, opts) {
+    var init = { headers: { Accept: 'application/json' } };
+    if (opts && opts.method) init.method = opts.method;
+    if (opts && opts.body !== undefined) {
+      init.headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(opts.body);
+    }
+    return fetch(url, init).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (data) {
         if (!r.ok) throw new Error(data.error || data.detail || r.statusText);
         return data;
@@ -120,10 +152,17 @@
     });
   }
 
+  /** Cadena de consulta; els valors en forma de llista es repeteixen (drive_ids=A&drive_ids=B). */
   function qs(params) {
-    return Object.keys(params).map(function (k) {
-      return encodeURIComponent(k) + '=' + encodeURIComponent(params[k] == null ? '' : params[k]);
-    }).join('&');
+    var parts = [];
+    Object.keys(params).forEach(function (k) {
+      var v = params[k];
+      if (v == null) v = '';
+      (Array.isArray(v) ? v : [v]).forEach(function (x) {
+        parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(x == null ? '' : x));
+      });
+    });
+    return parts.join('&');
   }
 
   function el(tag, cls, text) {
@@ -166,6 +205,8 @@
     return kind ? 'i-' + kind : 'i-file';
   }
 
+  function spaceIconId(space) { return space.kind === 'smart' ? 'i-space-smart' : 'i-space'; }
+
   var toastTimer = null;
   function toast(msg) {
     els.toast.textContent = msg;
@@ -174,10 +215,12 @@
     toastTimer = setTimeout(function () { els.toast.hidden = true; }, 2200);
   }
 
-  // ------------------------------------------------------------------ arbre
+  // ------------------------------------------------------------------ arbres (discs i espais)
 
+  /** Node de l'arbre de discs (disc o carpeta). */
   function makeNode(drive, path, opts) {
     var node = {
+      kind: 'folder',
       drive: drive,
       path: path || '',
       isDrive: !path,
@@ -224,17 +267,69 @@
     li._node = node;
     setHasChildren(node, node.hasChildren);
     nodes[nodeKey(drive, node.path)] = node;
+    wireNodeEvents(node);
+    return node;
+  }
 
-    toggle.addEventListener('click', function (e) {
+  /** Node de l'arbre d'espais; els fills es construeixen de cop (l'arbre és petit). */
+  function makeSpaceNode(space, level) {
+    var node = {
+      kind: 'space',
+      space: space,
+      level: level,
+      hasChildren: space.children.length > 0,
+      loaded: true,
+      loading: null,
+      li: null, row: null, toggle: null, iconEl: null, group: null
+    };
+    var li = el('li', 'tree-item tree-space');
+    li.setAttribute('role', 'treeitem');
+    li.setAttribute('aria-level', String(level));
+    li.setAttribute('aria-selected', 'false');
+    li.setAttribute('tabindex', '-1');
+    li.dataset.space = String(space.space_id);
+    var row = el('div', 'tree-row');
+    var toggle = el('span', 'tree-toggle');
+    toggle.appendChild(icon('i-chevron', 'tree-chevron'));
+    var iconEl = el('span', 'tree-icon');
+    iconEl.appendChild(icon(spaceIconId(space)));
+    row.appendChild(toggle);
+    row.appendChild(iconEl);
+    row.appendChild(el('span', 'tree-label', space.name));
+    row.title = space.name + (space.kind === 'smart' ? ' · cerca desada: ' + describeQuery(space.query) : ' · col·lecció');
+    li.appendChild(row);
+    node.li = li; node.row = row; node.toggle = toggle; node.iconEl = iconEl;
+    li._node = node;
+    setHasChildren(node, node.hasChildren);
+    if (node.hasChildren) {
+      var group = el('ul', 'tree-group');
+      group.setAttribute('role', 'group');
+      group.hidden = true;
+      space.children.forEach(function (child) { group.appendChild(makeSpaceNode(child, level + 1).li); });
+      node.group = group;
+      li.appendChild(group);
+    }
+    spaceNodes[space.space_id] = node;
+    wireNodeEvents(node);
+    return node;
+  }
+
+  function wireNodeEvents(node) {
+    node.toggle.addEventListener('click', function (e) {
       e.stopPropagation();
       if (node.hasChildren) toggleNode(node);
     });
-    row.addEventListener('click', function (e) {
+    node.row.addEventListener('click', function (e) {
       if (e.target.closest('.tree-toggle')) return;
-      navigate(node.drive, node.path, { source: 'tree' });
-      if (node.hasChildren) toggleNode(node, true);
+      activateNode(node);
     });
-    return node;
+  }
+
+  /** Obrir el que representa un node (carpeta o espai) i desplegar-lo. */
+  function activateNode(node) {
+    if (node.kind === 'space') openSpace(node.space.space_id, { source: 'tree' });
+    else navigate(node.drive, node.path, { source: 'tree' });
+    if (node.hasChildren) toggleNode(node, true);
   }
 
   function setHasChildren(node, has) {
@@ -252,7 +347,7 @@
     node.li.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     node.li.classList.toggle('tree-open', expanded);
     if (node.group) node.group.hidden = !expanded;
-    if (!node.isDrive) {
+    if (node.kind === 'folder' && !node.isDrive) {
       node.iconEl.textContent = '';
       node.iconEl.appendChild(icon(expanded ? 'i-folder-open' : 'i-folder'));
     }
@@ -293,12 +388,21 @@
     });
   }
 
+  function clearTreeSelection() {
+    [els.tree, els.spaces].forEach(function (tree) {
+      Array.prototype.forEach.call(tree.querySelectorAll('[aria-selected="true"]'), function (li) {
+        li.setAttribute('aria-selected', 'false');
+        li.setAttribute('tabindex', '-1');
+      });
+    });
+  }
+
   function selectTreeNode(node) {
-    var prev = els.tree.querySelector('[aria-selected="true"]');
-    if (prev && prev !== node.li) { prev.setAttribute('aria-selected', 'false'); prev.setAttribute('tabindex', '-1'); }
+    clearTreeSelection();
     node.li.setAttribute('aria-selected', 'true');
     node.li.setAttribute('tabindex', '0');
-    var keepFocus = els.tree.contains(document.activeElement);
+    var tree = node.li.closest('[role="tree"]');
+    var keepFocus = tree && tree.contains(document.activeElement);
     if (keepFocus) node.li.focus({ preventScroll: true });
     node.row.scrollIntoView({ block: 'nearest' });
   }
@@ -326,22 +430,35 @@
     });
   }
 
-  function visibleTreeItems() {
-    return Array.prototype.filter.call(els.tree.querySelectorAll('[role="treeitem"]'), function (li) {
+  /** Desplega els avantpassats d'un espai i el selecciona. */
+  function revealSpace(spaceId) {
+    var node = spaceNodes[spaceId];
+    if (!node) return;
+    var li = node.li.parentElement && node.li.parentElement.closest('[role="treeitem"]');
+    var parents = [];
+    while (li) { parents.unshift(li._node); li = li.parentElement && li.parentElement.closest('[role="treeitem"]'); }
+    parents.forEach(function (p) { setExpanded(p, true); });
+    selectTreeNode(node);
+  }
+
+  function visibleTreeItems(tree) {
+    return Array.prototype.filter.call(tree.querySelectorAll('[role="treeitem"]'), function (li) {
       return !li.closest('[role="group"][hidden]');
     });
   }
 
   function focusItem(li) {
     if (!li) return;
-    var prev = els.tree.querySelector('[role="treeitem"][tabindex="0"]');
+    var tree = li.closest('[role="tree"]');
+    var prev = tree.querySelector('[role="treeitem"][tabindex="0"]');
     if (prev && prev !== li) prev.setAttribute('tabindex', '-1');
     li.setAttribute('tabindex', '0');
     li.focus();
     li._node.row.scrollIntoView({ block: 'nearest' });
   }
 
-  els.tree.addEventListener('keydown', function (e) {
+  function treeKeydown(e) {
+    var tree = e.currentTarget;
     var li = e.target.closest('[role="treeitem"]');
     if (!li || !li._node) return;
     var node = li._node;
@@ -349,7 +466,7 @@
     switch (e.key) {
       case 'ArrowDown':
       case 'ArrowUp':
-        items = visibleTreeItems();
+        items = visibleTreeItems(tree);
         idx = items.indexOf(li) + (e.key === 'ArrowDown' ? 1 : -1);
         if (idx >= 0 && idx < items.length) focusItem(items[idx]);
         break;
@@ -370,29 +487,106 @@
         }
         break;
       case 'Home':
-        items = visibleTreeItems();
+        items = visibleTreeItems(tree);
         focusItem(items[0]);
         break;
       case 'End':
-        items = visibleTreeItems();
+        items = visibleTreeItems(tree);
         focusItem(items[items.length - 1]);
         break;
       case 'Enter':
       case ' ':
-        navigate(node.drive, node.path, { source: 'tree' });
-        if (node.hasChildren) toggleNode(node, true);
+        activateNode(node);
         break;
       default:
         return;
     }
     e.preventDefault();
-  });
+  }
 
-  // Si es fa clic en un element de l'arbre, passa a ser el focus del roving tabindex
-  els.tree.addEventListener('mousedown', function (e) {
+  function treeMousedown(e) {
     var li = e.target.closest('[role="treeitem"]');
     if (li) focusItem(li);
+  }
+
+  [els.tree, els.spaces].forEach(function (tree) {
+    tree.addEventListener('keydown', treeKeydown);
+    tree.addEventListener('mousedown', treeMousedown);
   });
+
+  // ------------------------------------------------------------------ espais: arbre i consultes
+
+  function indexSpaces(tree) {
+    state.spacesTree = tree;
+    state.spacesById = {};
+    (function walk(list, ancestors) {
+      list.forEach(function (s) {
+        s.ancestors = ancestors;
+        state.spacesById[s.space_id] = s;
+        walk(s.children || [], ancestors.concat([s]));
+      });
+    })(tree, []);
+  }
+
+  function renderSpacesTree() {
+    var expanded = {};
+    Object.keys(spaceNodes).forEach(function (id) {
+      if (spaceNodes[id].li.getAttribute('aria-expanded') === 'true') expanded[id] = true;
+    });
+    spaceNodes = {};
+    els.spaces.textContent = '';
+    var frag = document.createDocumentFragment();
+    state.spacesTree.forEach(function (s) { frag.appendChild(makeSpaceNode(s, 1).li); });
+    els.spaces.appendChild(frag);
+    Object.keys(expanded).forEach(function (id) { if (spaceNodes[id]) setExpanded(spaceNodes[id], true); });
+    var any = state.spacesTree.length > 0;
+    els.spaces.hidden = !any;
+    els.spacesEmpty.hidden = any;
+    if (any && !els.spaces.querySelector('[tabindex="0"]')) els.spaces.firstElementChild.setAttribute('tabindex', '0');
+    if (state.mode === 'space' && state.space && spaceNodes[state.space.space_id]) revealSpace(state.space.space_id);
+  }
+
+  function loadSpacesTree() {
+    return fetchJson(API.spacesTree).then(function (data) {
+      indexSpaces(data.spaces || []);
+      renderSpacesTree();
+    }).catch(function (err) {
+      els.spacesEmpty.hidden = false;
+      els.spacesEmpty.textContent = 'No s’han pogut carregar els espais: ' + err.message;
+    });
+  }
+
+  /** Resum llegible dels criteris d'una cerca desada. */
+  function describeQuery(q) {
+    if (!q) return '';
+    var parts = [];
+    if (q.q_name) parts.push('nom «' + q.q_name + '»');
+    if (q.q_path) parts.push('ruta «' + q.q_path + '»');
+    if (!q.q_name && !q.q_path && q.q) {
+      parts.push((q.scope === 'path' ? 'ruta' : q.scope === 'both' ? 'nom o ruta' : 'nom') + ' «' + q.q + '»');
+    }
+    if (q.in_drive) parts.push('dins de ' + q.in_drive + (q.in_path ? ' › ' + q.in_path.split('/').join(' › ') : ''));
+    else if (q.drive_ids && q.drive_ids.length) parts.push('discs ' + q.drive_ids.join(', '));
+    if (q.extension) parts.push('extensió ' + q.extension);
+    if (q.min_size_mb) parts.push('≥ ' + q.min_size_mb + ' MB');
+    if (q.exclude) parts.push('excloent «' + q.exclude + '»');
+    if (q.include_missing) parts.push('amb desapareguts');
+    return parts.join(' · ') || 'tots els fitxers';
+  }
+
+  /** Paràmetres de la pàgina Cercar equivalents a una cerca desada. */
+  function queryToParams(q) {
+    var p = {};
+    ['q_name', 'q_path', 'q', 'scope', 'extension', 'min_size_mb', 'exclude', 'in_drive', 'in_path'].forEach(function (k) {
+      if (q[k]) p[k] = q[k];
+    });
+    if (q.drive_ids && q.drive_ids.length) p.drive_ids = q.drive_ids;
+    if (q.include_missing) p.include_missing = 1;
+    if (q.sort) { p.sort_f = q.sort; p.dir_f = q.dir || 'asc'; }
+    p.search_type = 'files';
+    p.submitted = 1;
+    return p;
+  }
 
   // ------------------------------------------------------------------ navegació
 
@@ -402,27 +596,53 @@
     return location.pathname + '?' + qs(params);
   }
 
+  function buildSpaceUrl(spaceId) {
+    return location.pathname + '?' + qs({ space: spaceId });
+  }
+
+  function pushHistory(stateObj, url, opts) {
+    if (opts.push !== false) {
+      state.histIdx += 1;
+      state.histMax = state.histIdx;
+      stateObj.idx = state.histIdx;
+      history.pushState(stateObj, '', url);
+    } else if (opts.replace) {
+      stateObj.idx = state.histIdx;
+      history.replaceState(stateObj, '', url);
+    }
+  }
+
   function updateNavButtons() {
     els.back.disabled = state.histIdx <= 0;
     els.forward.disabled = state.histIdx >= state.histMax;
-    els.up.disabled = state.drive == null || !state.path;
-    els.actions.hidden = state.drive == null;
+    if (state.mode === 'space') {
+      els.up.disabled = !(state.space && state.space.parent_id != null);
+      els.actions.hidden = true;
+      els.copy.hidden = true;
+      els.spaceActions.hidden = false;
+      els.spaceEdit.hidden = state.space.kind !== 'smart';
+      els.spaceEdit.href = state.space.kind === 'smart'
+        ? searchUrl + '?' + qs(queryToParams(state.space.query || {})) + '&space=' + state.space.space_id
+        : '#';
+    } else {
+      els.up.disabled = state.drive == null || !state.path;
+      els.actions.hidden = state.drive == null;
+      els.spaceActions.hidden = true;
+    }
+    root.classList.toggle('mode-space', state.mode === 'space');
     closeMenu();
   }
 
   function navigate(drive, path, opts) {
     opts = opts || {};
     path = path || '';
-    var same = state.drive === drive && state.path === path;
+    var same = state.mode === 'folder' && state.drive === drive && state.path === path;
+    state.mode = 'folder';
+    state.space = null;
     state.drive = drive;
     state.path = path;
-    if (opts.push !== false && !same) {
-      state.histIdx += 1;
-      state.histMax = state.histIdx;
-      history.pushState({ drive: drive, path: path, idx: state.histIdx }, '', buildUrl(drive, path));
-    } else if (opts.replace) {
-      history.replaceState({ drive: drive, path: path, idx: state.histIdx }, '', buildUrl(drive, path));
-    }
+    if (!same) pushHistory({ drive: drive, path: path }, buildUrl(drive, path), opts);
+    else if (opts.replace) pushHistory({ drive: drive, path: path }, buildUrl(drive, path), { push: false, replace: true });
     document.title = (path ? baseName(path) + ' — ' : '') + drive + ' — Explorador — DiscScope';
     updateNavButtons();
     renderAddress();
@@ -431,11 +651,30 @@
     else { var n = nodes[nodeKey(drive, path)]; if (n) selectTreeNode(n); }
   }
 
+  function openSpace(spaceId, opts) {
+    opts = opts || {};
+    var space = state.spacesById[spaceId];
+    if (!space) { toast('Aquest espai ja no existeix.'); return; }
+    var same = state.mode === 'space' && state.space && state.space.space_id === spaceId;
+    state.mode = 'space';
+    state.space = space;
+    state.spaceAncestors = space.ancestors || [];
+    state.drive = null;
+    state.path = '';
+    if (!same) pushHistory({ space: spaceId }, buildSpaceUrl(spaceId), opts);
+    document.title = space.name + ' — Espais — Explorador — DiscScope';
+    updateNavButtons();
+    renderAddress();
+    loadSpaceContents();
+    revealSpace(spaceId);
+  }
+
   window.addEventListener('popstate', function (e) {
     var st = e.state;
-    if (!st || !st.drive) return;
+    if (!st) return;
     state.histIdx = st.idx || 0;
-    navigate(st.drive, st.path || '', { push: false });
+    if (st.space) openSpace(st.space, { push: false });
+    else if (st.drive) navigate(st.drive, st.path || '', { push: false });
   });
 
   els.back.addEventListener('click', function () { history.back(); });
@@ -443,6 +682,10 @@
   els.up.addEventListener('click', goUp);
 
   function goUp() {
+    if (state.mode === 'space') {
+      if (state.space && state.space.parent_id != null) openSpace(state.space.parent_id);
+      return;
+    }
     if (state.drive == null || !state.path) return;
     navigate(state.drive, parentPath(state.path));
   }
@@ -455,10 +698,45 @@
 
   // ------------------------------------------------------------------ barra d'adreça
 
+  function addressSep() {
+    var sep = el('span', 'explorer-address-sep');
+    sep.appendChild(icon('i-chevron'));
+    return sep;
+  }
+
   function renderAddress() {
     els.address.textContent = '';
+    if (state.mode === 'space') {
+      var head = el('span', 'explorer-address-item explorer-address-root');
+      head.appendChild(icon('i-space'));
+      head.appendChild(el('span', null, 'Espais'));
+      els.address.appendChild(head);
+      var chain = state.spaceAncestors.concat([state.space]);
+      chain.forEach(function (s, i) {
+        els.address.appendChild(addressSep());
+        var last = i === chain.length - 1;
+        var item;
+        if (last) {
+          item = el('span', 'explorer-address-item explorer-address-current');
+          item.setAttribute('aria-current', 'page');
+        } else {
+          item = el('a', 'explorer-address-item');
+          item.href = buildSpaceUrl(s.space_id);
+          item.addEventListener('click', function (e) {
+            if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            openSpace(s.space_id);
+          });
+        }
+        item.appendChild(icon(spaceIconId(s)));
+        item.appendChild(el('span', null, s.name));
+        els.address.appendChild(item);
+      });
+      els.address.scrollLeft = els.address.scrollWidth;
+      return;
+    }
     if (state.drive == null) {
-      els.address.appendChild(el('span', 'explorer-address-placeholder', 'Trieu un disc o una carpeta'));
+      els.address.appendChild(el('span', 'explorer-address-placeholder', 'Trieu un disc, una carpeta o un espai'));
       els.copy.hidden = true;
       return;
     }
@@ -471,11 +749,7 @@
     });
     crumbs.forEach(function (c, i) {
       var last = i === crumbs.length - 1;
-      if (i > 0) {
-        var sep = el('span', 'explorer-address-sep');
-        sep.appendChild(icon('i-chevron'));
-        els.address.appendChild(sep);
-      }
+      if (i > 0) els.address.appendChild(addressSep());
       var item;
       if (last) {
         item = el('span', 'explorer-address-item explorer-address-current');
@@ -498,15 +772,16 @@
   }
 
   /** Ruta nativa (amb l'arrel de l'escaneig) d'una ruta relativa en format API. */
-  function nativePathOf(path) {
-    var d = state.drives[state.drive] || {};
+  function nativePathOf(path, drive) {
+    drive = drive || state.drive;
+    var d = state.drives[drive] || {};
     var rel = path ? path.split('/').join('\\') : '';
     var rootPath = d.root_path || '';
     if (rootPath) {
       if (!/[\\\/]$/.test(rootPath)) rootPath += '\\';
       return rootPath + rel;
     }
-    return state.drive + (rel ? '\\' + rel : '');
+    return drive + (rel ? '\\' + rel : '');
   }
 
   function nativePath() { return nativePathOf(state.path); }
@@ -525,23 +800,21 @@
 
   // ------------------------------------------------------------------ menú contextual
 
-  function joinPath(parent, name) { return parent ? parent + '/' + name : name; }
-
   /** Accions d'una carpeta (fila del llistat o carpeta actual). */
-  function folderMenuItems(path, name, opts) {
+  function folderMenuItems(drive, path, opts) {
     var items = [];
     if (opts && opts.openable) {
-      items.push({ label: 'Obre', icon: 'i-folder-open', action: function () { navigate(state.drive, path); } });
+      items.push({ label: 'Obre', icon: 'i-folder-open', action: function () { navigate(drive, path); } });
       items.push({ sep: true });
     }
     items.push({ label: 'Cerca dins d’aquesta carpeta', icon: 'i-search-folder',
-      href: searchUrl + '?' + qs({ in_drive: state.drive, in_path: path, submitted: 1 }) });
+      href: searchUrl + '?' + qs({ in_drive: drive, in_path: path, submitted: 1 }) });
     items.push({ label: 'Exporta a CSV (només aquesta carpeta)', icon: 'i-download', download: true,
-      href: exportUrl + '?' + qs({ drive_id: state.drive, path: path, recursive: 0 }) });
+      href: exportUrl + '?' + qs({ drive_id: drive, path: path, recursive: 0 }) });
     items.push({ label: 'Exporta a CSV (amb subcarpetes)', icon: 'i-download', download: true,
-      href: exportUrl + '?' + qs({ drive_id: state.drive, path: path, recursive: 1 }) });
+      href: exportUrl + '?' + qs({ drive_id: drive, path: path, recursive: 1 }) });
     items.push({ sep: true });
-    items.push({ label: 'Copia la ruta', icon: 'i-copy', action: function () { copyText(nativePathOf(path)); } });
+    items.push({ label: 'Copia la ruta', icon: 'i-copy', action: function () { copyText(nativePathOf(path, drive)); } });
     return items;
   }
 
@@ -553,15 +826,20 @@
     } else {
       dupHref = duplicatesUrl + '?' + qs({ group: 'name-size', name: r.name, size: r.size == null ? '' : r.size });
     }
-    return [
-      { label: 'Cerca aquest nom a tots els discs', icon: 'i-search',
-        href: searchUrl + '?' + qs({ q_name: r.name, submitted: 1 }) },
-      { label: r.hash ? 'Còpies d’aquest fitxer (mateix contingut)' : 'Còpies d’aquest fitxer (nom i mida)',
-        icon: 'i-duplicates', href: dupHref },
-      { sep: true },
-      { label: 'Copia la ruta', icon: 'i-copy',
-        action: function () { copyText(nativePathOf(joinPath(state.path, r.name))); } }
-    ];
+    var items = [];
+    if (state.mode === 'space') {
+      items.push({ label: 'Obre la carpeta (' + r.drive + ')', icon: 'i-folder-open',
+        action: function () { navigate(r.drive, r.folder); } });
+      items.push({ sep: true });
+    }
+    items.push({ label: 'Cerca aquest nom a tots els discs', icon: 'i-search',
+      href: searchUrl + '?' + qs({ q_name: r.name, submitted: 1 }) });
+    items.push({ label: r.hash ? 'Còpies d’aquest fitxer (mateix contingut)' : 'Còpies d’aquest fitxer (nom i mida)',
+      icon: 'i-duplicates', href: dupHref });
+    items.push({ sep: true });
+    items.push({ label: 'Copia la ruta', icon: 'i-copy',
+      action: function () { copyText(nativePathOf(joinPath(r.folder, r.name), r.drive)); } });
+    return items;
   }
 
   var menuState = { open: false, returnFocus: null, anchorBtn: null, openedAt: 0 };
@@ -581,7 +859,7 @@
   function menuItems() { return Array.prototype.slice.call(els.menu.querySelectorAll('[role="menuitem"]')); }
 
   /**
-   * Obre el menú amb `items` ({label, icon, href?, download?, action?} o {sep:true}).
+   * Obre el menú amb `items` ({label, icon, href?, download?, action?, checked?} o {sep:true}).
    * anchor: {x, y} (punt del ratolí) o {el} (element sota el qual es desplega).
    */
   function openMenu(items, anchor, title, returnFocus) {
@@ -605,6 +883,8 @@
       }
       item.setAttribute('role', 'menuitem');
       item.setAttribute('tabindex', '-1');
+      if (it.checked) item.classList.add('explorer-menu-item-checked');
+      if (it.indent) item.style.paddingLeft = (10 + 14 * it.indent) + 'px';
       if (it.icon) item.appendChild(icon(it.icon));
       item.appendChild(el('span', null, it.label));
       item.addEventListener('click', function (e) {
@@ -672,14 +952,16 @@
   els.actions.addEventListener('click', function () {
     if (menuState.open && menuState.anchorBtn === els.actions) { closeMenu(); return; }
     if (state.drive == null) return;
-    openMenu(folderMenuItems(state.path, baseName(state.path) || state.drive),
-      { el: els.actions }, nativePath(), els.actions);
+    openMenu(folderMenuItems(state.drive, state.path), { el: els.actions }, nativePath(), els.actions);
   });
 
   function openRowMenu(tr, anchor) {
     var r = tr._row;
     if (!r) return;
-    var items = r.kind === 'folder' ? folderMenuItems(r.path, r.name, { openable: true }) : fileMenuItems(r);
+    var items;
+    if (r.kind === 'folder') items = folderMenuItems(r.drive, r.path, { openable: true });
+    else if (r.kind === 'space') items = [{ label: 'Obre', icon: 'i-folder-open', action: function () { openSpace(r.space.space_id); } }];
+    else items = fileMenuItems(r);
     openMenu(items, anchor, r.name, tr);
   }
 
@@ -706,6 +988,11 @@
     if (tr && tr._row && !e.target.closest('a, button')) focusRow(tr);
   });
 
+  function openRow(r) {
+    if (r.kind === 'folder') navigate(r.drive, r.path);
+    else if (r.kind === 'space') openSpace(r.space.space_id);
+  }
+
   els.tbody.addEventListener('keydown', function (e) {
     var tr = e.target.closest('tr');
     if (!tr || !tr._row || e.target !== tr) return;
@@ -716,9 +1003,7 @@
       case 'ArrowUp': if (idx > 0) focusRow(rows[idx - 1]); break;
       case 'Home': focusRow(rows[0]); break;
       case 'End': focusRow(rows[rows.length - 1]); break;
-      case 'Enter':
-        if (tr._row.kind === 'folder') navigate(state.drive, tr._row.path);
-        break;
+      case 'Enter': openRow(tr._row); break;
       case 'F10':
         if (!e.shiftKey) return;
         openRowMenu(tr, { el: tr.querySelector('.row-menu-btn') || tr });
@@ -751,15 +1036,14 @@
   function setListView(view) {
     els.welcome.hidden = view !== 'welcome';
     els.emptyFolder.hidden = view !== 'empty';
+    els.emptySpace.hidden = view !== 'emptyspace';
     els.noMatch.hidden = view !== 'nomatch';
     els.error.hidden = view !== 'error';
     els.loading.hidden = view !== 'loading';
     els.table.hidden = view !== 'table';
   }
 
-  function loadContents() {
-    var reqId = ++state.reqId;
-    var drive = state.drive, path = state.path;
+  function resetList() {
     state.rows = [];
     state.totals = null;
     state.offset = 0;
@@ -771,6 +1055,12 @@
     els.statusPages.textContent = '';
     els.status.textContent = 'Carregant…';
     setListView('loading');
+  }
+
+  function loadContents() {
+    var reqId = ++state.reqId;
+    var drive = state.drive, path = state.path;
+    resetList();
 
     fetchJson(API.contents + '?' + qs({ drive_id: drive, path: path, limit: PAGE_SIZE, offset: 0 }))
       .then(function (data) {
@@ -802,20 +1092,70 @@
       .catch(function () { /* els totals són complementaris */ });
   }
 
+  function spaceContentsUrl(offset) {
+    return API.spaces + '/' + state.space.space_id + '/contents?' + qs({
+      limit: PAGE_SIZE, offset: offset, sort: state.sort.key, dir: state.sort.dir
+    });
+  }
+
+  function loadSpaceContents() {
+    var reqId = ++state.reqId;
+    var space = state.space;
+    resetList();
+    if (!(state.sort.key in { name: 1, type: 1, size: 1, date: 1, drive: 1, folder: 1 })) state.sort = { key: 'name', dir: 'asc' };
+
+    fetchJson(spaceContentsUrl(0))
+      .then(function (data) {
+        if (reqId !== state.reqId) return;
+        state.rows = spaceChildRows(space).concat(toSpaceRows(data));
+        state.totalFiles = data.total || 0;
+        state.directBytes = 0;
+        state.hasMore = !!data.has_more;
+        renderRows();
+        renderStatus();
+        els.list.scrollTop = 0;
+      })
+      .catch(function (err) {
+        if (reqId !== state.reqId) return;
+        els.error.textContent = 'No s’ha pogut carregar l’espai: ' + err.message;
+        setListView('error');
+        els.status.textContent = '';
+      });
+  }
+
+  function spaceChildRows(space) {
+    return (space.children || []).map(function (s) {
+      return { kind: 'space', space: s, name: s.name, path: '', ext: '', size: null, items: null,
+        date: '', hasTotals: true, drive: '', folder: '' };
+    });
+  }
+
+  function toSpaceRows(data) {
+    return (data.rows || []).map(function (f) {
+      return {
+        kind: 'file', name: f.name, path: '', ext: cleanExt(f.extension),
+        size: f.size_bytes == null ? null : Number(f.size_bytes), items: null,
+        date: f.modified_utc || '', hasTotals: true, hash: f.hash_sha256 || '',
+        drive: f.drive_id, folder: f.folder || '', missing: !!f.missing_since_utc
+      };
+    });
+  }
+
   function toRows(data) {
     var rows = [];
     (data.folders || []).forEach(function (f) {
       rows.push({
         kind: 'folder', name: f.name, path: f.path, ext: '',
         size: f.total_bytes || 0, items: f.files_count || 0, subfolders: null,
-        date: '', hasTotals: false
+        date: '', hasTotals: false, drive: state.drive, folder: state.path
       });
     });
     (data.files || []).forEach(function (f) {
       rows.push({
         kind: 'file', name: f.name, path: '', ext: cleanExt(f.extension),
         size: f.size_bytes == null ? null : Number(f.size_bytes), items: null,
-        date: f.modified_utc || '', hasTotals: true, hash: f.hash_sha256 || ''
+        date: f.modified_utc || '', hasTotals: true, hash: f.hash_sha256 || '',
+        drive: state.drive, folder: state.path
       });
     });
     return rows;
@@ -837,8 +1177,10 @@
 
   var collator = new Intl.Collator('ca', { numeric: true, sensitivity: 'base' });
 
+  function kindRank(r) { return r.kind === 'space' ? 0 : r.kind === 'folder' ? 1 : 2; }
+
   function compareRows(a, b) {
-    if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+    if (a.kind !== b.kind) return kindRank(a) - kindRank(b);
     var k = state.sort.key, dir = state.sort.dir === 'asc' ? 1 : -1;
     var r = 0;
     if (k === 'name') r = collator.compare(a.name, b.name);
@@ -846,24 +1188,30 @@
     else if (k === 'size') r = ((a.size || 0) - (b.size || 0)) || collator.compare(a.name, b.name);
     else if (k === 'items') r = ((a.items || 0) - (b.items || 0)) || collator.compare(a.name, b.name);
     else if (k === 'date') r = (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) || collator.compare(a.name, b.name);
+    else if (k === 'drive') r = collator.compare(a.drive, b.drive) || collator.compare(a.name, b.name);
+    else if (k === 'folder') r = collator.compare(a.folder, b.folder) || collator.compare(a.name, b.name);
     return r * dir;
   }
 
   function visibleRows() {
     var f = state.filter.trim().toLowerCase();
     var rows = f ? state.rows.filter(function (r) { return r.name.toLowerCase().indexOf(f) >= 0; }) : state.rows.slice();
-    rows.sort(compareRows);
+    // en mode espai l'ordre ve del servidor (la llista és una pàgina d'un conjunt més gran)
+    if (state.mode !== 'space') rows.sort(compareRows);
     return rows;
   }
 
   function renderRows() {
     var rows = visibleRows();
     els.tbody.textContent = '';
-    if (state.rows.length === 0) { setListView('empty'); return; }
+    if (state.rows.length === 0) {
+      if (state.mode === 'space') renderEmptySpace(); else setListView('empty');
+      return;
+    }
     if (rows.length === 0) { setListView('nomatch'); return; }
     var frag = document.createDocumentFragment();
     rows.forEach(function (r, i) {
-      var tr = r.kind === 'folder' ? folderRow(r) : fileRow(r);
+      var tr = r.kind === 'folder' ? folderRow(r) : r.kind === 'space' ? spaceRow(r) : fileRow(r);
       tr._row = r;
       tr.setAttribute('tabindex', i === 0 ? '0' : '-1');
       tr.querySelector('.col-name').appendChild(rowMenuButton(tr));
@@ -875,22 +1223,71 @@
     renderStatus();
   }
 
+  function renderEmptySpace() {
+    var s = state.space;
+    if (s.kind === 'smart') {
+      els.emptySpaceText.textContent = 'Cap fitxer coincideix amb aquesta cerca desada.';
+      els.emptySpaceHint.textContent = 'Criteris: ' + describeQuery(s.query) + '. Podeu editar-los amb el botó de la barra d’eines.';
+    } else {
+      els.emptySpaceText.textContent = 'Aquest espai és buit.';
+      els.emptySpaceHint.textContent = 'Deseu-hi cerques des de Cercar (triant-lo com a «Dins de») o creeu-hi espais amb el botó + del panell.';
+    }
+    setListView('emptyspace');
+  }
+
+  function driveCell(r) {
+    var td = el('td', 'col-drive');
+    if (r.drive) {
+      var a = el('a', 'explorer-link');
+      a.href = buildUrl(r.drive, '');
+      a.appendChild(icon('i-drive', 'row-icon'));
+      a.appendChild(el('span', null, r.drive));
+      a.title = 'Obre el disc ' + r.drive;
+      a.addEventListener('click', function (e) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        navigate(r.drive, '');
+      });
+      td.appendChild(a);
+    }
+    return td;
+  }
+
+  function folderCell(r) {
+    var td = el('td', 'col-folder');
+    if (r.drive) {
+      var a = el('a', 'explorer-link');
+      a.href = buildUrl(r.drive, r.folder);
+      a.textContent = r.folder ? r.folder.split('/').join('\\') : '(arrel)';
+      a.title = 'Obre la carpeta a l’explorador';
+      a.addEventListener('click', function (e) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        navigate(r.drive, r.folder);
+      });
+      td.appendChild(a);
+    }
+    return td;
+  }
+
   function folderRow(r) {
     var tr = el('tr', 'row-folder');
     tr.dataset.path = r.path;
     var tdName = el('td', 'col-name');
     var a = el('a', 'explorer-link');
-    a.href = buildUrl(state.drive, r.path);
+    a.href = buildUrl(r.drive, r.path);
     a.appendChild(icon('i-folder', 'row-icon'));
     a.appendChild(el('span', 'row-name', r.name));
     a.title = r.name;
     a.addEventListener('click', function (e) {
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();
-      navigate(state.drive, r.path);
+      navigate(r.drive, r.path);
     });
     tdName.appendChild(a);
     tr.appendChild(tdName);
+    tr.appendChild(driveCell(r));
+    tr.appendChild(folderCell(r));
     tr.appendChild(el('td', 'col-type', 'Carpeta'));
     var tdItems = el('td', 'col-items num');
     if (r.hasTotals) {
@@ -907,19 +1304,46 @@
     else tdSize.appendChild(el('span', 'muted pending', '…'));
     tr.appendChild(tdSize);
     tr.appendChild(el('td', 'col-date', ''));
-    tr.addEventListener('dblclick', function () { navigate(state.drive, r.path); });
+    tr.addEventListener('dblclick', function () { navigate(r.drive, r.path); });
+    return tr;
+  }
+
+  function spaceRow(r) {
+    var tr = el('tr', 'row-space');
+    var tdName = el('td', 'col-name');
+    var a = el('a', 'explorer-link');
+    a.href = buildSpaceUrl(r.space.space_id);
+    a.appendChild(icon(spaceIconId(r.space), 'row-icon'));
+    a.appendChild(el('span', 'row-name', r.name));
+    a.title = r.space.kind === 'smart' ? 'Cerca desada: ' + describeQuery(r.space.query) : 'Espai';
+    a.addEventListener('click', function (e) {
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+      e.preventDefault();
+      openSpace(r.space.space_id);
+    });
+    tdName.appendChild(a);
+    tr.appendChild(tdName);
+    tr.appendChild(el('td', 'col-drive', ''));
+    tr.appendChild(el('td', 'col-folder', ''));
+    tr.appendChild(el('td', 'col-type', r.space.kind === 'smart' ? 'Cerca desada' : 'Espai'));
+    tr.appendChild(el('td', 'col-items num', ''));
+    tr.appendChild(el('td', 'col-size num', ''));
+    tr.appendChild(el('td', 'col-date', fmtDate(r.space.updated_utc || r.space.created_utc)));
+    tr.addEventListener('dblclick', function () { openSpace(r.space.space_id); });
     return tr;
   }
 
   function fileRow(r) {
-    var tr = el('tr', 'row-file');
+    var tr = el('tr', 'row-file' + (r.missing ? ' row-missing' : ''));
     var tdName = el('td', 'col-name');
     var wrap = el('span', 'explorer-file');
     wrap.appendChild(icon(fileIconId(r.ext), 'row-icon'));
     wrap.appendChild(el('span', 'row-name', r.name));
-    wrap.title = r.name;
+    wrap.title = r.name + (r.missing ? ' (no present a l’últim escaneig)' : '');
     tdName.appendChild(wrap);
     tr.appendChild(tdName);
+    tr.appendChild(driveCell(r));
+    tr.appendChild(folderCell(r));
     tr.appendChild(el('td', 'col-type', r.ext ? r.ext.toUpperCase() : '—'));
     tr.appendChild(el('td', 'col-items num', ''));
     tr.appendChild(el('td', 'col-size num', r.size == null ? '' : fmtBytes(r.size)));
@@ -928,6 +1352,23 @@
   }
 
   function renderStatus() {
+    if (state.mode === 'space') {
+      var sp = state.space;
+      var loaded = state.rows.filter(function (r) { return r.kind === 'file'; }).length;
+      var sParts = [];
+      var sf = state.filter.trim();
+      if (sf) {
+        sParts.push(fmtInt(visibleRows().length) + ' de ' + plural(state.rows.length, 'element carregat', 'elements carregats') + ' coincideixen amb «' + sf + '»');
+      } else if (sp.kind === 'smart') {
+        sParts.push(plural(state.totalFiles, 'fitxer coincideix', 'fitxers coincideixen') + ' · ' + describeQuery(sp.query));
+      } else {
+        sParts.push(plural((sp.children || []).length, 'espai', 'espais'));
+      }
+      els.status.textContent = sParts.join('  │  ');
+      els.statusPages.textContent = state.totalFiles > loaded ? 'Mostrant ' + fmtInt(loaded) + ' de ' + fmtInt(state.totalFiles) + ' fitxers' : '';
+      els.loadMore.hidden = !state.hasMore;
+      return;
+    }
     if (state.drive == null) { els.status.textContent = ''; return; }
     var folders = state.rows.filter(function (r) { return r.kind === 'folder'; }).length;
     var loadedFiles = state.rows.length - folders;
@@ -957,14 +1398,18 @@
     var reqId = state.reqId;
     var nextOffset = state.offset + PAGE_SIZE;
     els.loadMore.disabled = true;
-    fetchJson(API.contents + '?' + qs({ drive_id: state.drive, path: state.path, limit: PAGE_SIZE, offset: nextOffset }))
+    var url = state.mode === 'space'
+      ? spaceContentsUrl(nextOffset)
+      : API.contents + '?' + qs({ drive_id: state.drive, path: state.path, limit: PAGE_SIZE, offset: nextOffset });
+    fetchJson(url)
       .then(function (data) {
         if (reqId !== state.reqId) return;
         state.offset = nextOffset;
-        var more = toRows({ files: data.files });
+        var more = state.mode === 'space' ? toSpaceRows(data) : toRows({ files: data.files });
         state.rows = state.rows.concat(more);
         state.hasMore = !!data.has_more;
-        if (data.total_files) state.totalFiles = data.total_files;
+        if (state.mode === 'space') { if (data.total != null) state.totalFiles = data.total; }
+        else if (data.total_files) state.totalFiles = data.total_files;
         renderRows();
       })
       .catch(function (err) { toast('No s’han pogut carregar més fitxers: ' + err.message); })
@@ -990,7 +1435,8 @@
     var key = btn.dataset.sort;
     if (state.sort.key === key) state.sort.dir = state.sort.dir === 'asc' ? 'desc' : 'asc';
     else state.sort = { key: key, dir: key === 'size' || key === 'items' || key === 'date' ? 'desc' : 'asc' };
-    renderRows();
+    if (state.mode === 'space') loadSpaceContents();  // l'ordre el fa el servidor
+    else renderRows();
   });
 
   // filtre
@@ -1004,6 +1450,83 @@
   });
   els.filter.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') { els.filter.value = ''; state.filter = ''; renderRows(); }
+  });
+
+  // ------------------------------------------------------------------ accions dels espais
+
+  function spaceOptionsForMove(exclude) {
+    // tots els espais menys l'exclòs i els seus descendents, indentats
+    var out = [];
+    (function walk(list, depth) {
+      list.forEach(function (s) {
+        if (s.space_id === exclude) return;
+        out.push({ space: s, depth: depth });
+        walk(s.children || [], depth + 1);
+      });
+    })(state.spacesTree, 0);
+    return out;
+  }
+
+  function afterSpaceChange(openId) {
+    return loadSpacesTree().then(function () {
+      if (openId != null && state.spacesById[openId]) openSpace(openId, { push: openId !== (state.space && state.space.space_id) });
+    });
+  }
+
+  els.spaceNew.addEventListener('click', function () {
+    var parent = state.mode === 'space' && state.space ? state.space : null;
+    var name = window.prompt(parent ? 'Nom del nou espai dins de «' + parent.name + '»:' : 'Nom del nou espai:', '');
+    if (name == null || !name.trim()) return;
+    fetchJson(API.spaces, { method: 'POST', body: { name: name.trim(), kind: 'manual', parent_id: parent ? parent.space_id : null } })
+      .then(function (data) { toast('Espai «' + data.space.name + '» creat.'); return afterSpaceChange(data.space.space_id); })
+      .catch(function (err) { toast('No s’ha pogut crear l’espai: ' + err.message); });
+  });
+
+  els.spaceRename.addEventListener('click', function () {
+    if (!state.space) return;
+    var name = window.prompt('Nou nom de l’espai:', state.space.name);
+    if (name == null || !name.trim() || name.trim() === state.space.name) return;
+    var id = state.space.space_id;
+    fetchJson(API.spaces + '/' + id, { method: 'PATCH', body: { name: name.trim() } })
+      .then(function () { toast('Espai reanomenat.'); return afterSpaceChange(id); })
+      .catch(function (err) { toast('No s’ha pogut reanomenar: ' + err.message); });
+  });
+
+  els.spaceMove.addEventListener('click', function () {
+    if (!state.space) return;
+    if (menuState.open && menuState.anchorBtn === els.spaceMove) { closeMenu(); return; }
+    var id = state.space.space_id;
+    function moveTo(parentId) {
+      fetchJson(API.spaces + '/' + id, { method: 'PATCH', body: { parent_id: parentId } })
+        .then(function () { toast('Espai mogut.'); return afterSpaceChange(id); })
+        .catch(function (err) { toast('No s’ha pogut moure: ' + err.message); });
+    }
+    var items = [{ label: 'Arrel dels espais', icon: 'i-space', checked: state.space.parent_id == null,
+      action: function () { moveTo(null); } }];
+    spaceOptionsForMove(id).forEach(function (o) {
+      items.push({ label: o.space.name, icon: spaceIconId(o.space), indent: o.depth + 1,
+        checked: state.space.parent_id === o.space.space_id,
+        action: function () { moveTo(o.space.space_id); } });
+    });
+    openMenu(items, { el: els.spaceMove }, 'Mou «' + state.space.name + '» dins de…', els.spaceMove);
+  });
+
+  els.spaceDelete.addEventListener('click', function () {
+    if (!state.space) return;
+    var s = state.space;
+    var n = (s.children || []).length;
+    var msg = 'Eliminar l’espai «' + s.name + '»' + (n ? ' i els ' + n + ' espais que conté' : '') + '? Els fitxers dels discs no es toquen.';
+    if (!window.confirm(msg)) return;
+    fetchJson(API.spaces + '/' + s.space_id, { method: 'DELETE' })
+      .then(function () {
+        toast('Espai eliminat.');
+        var parent = s.parent_id;
+        return loadSpacesTree().then(function () {
+          if (parent != null && state.spacesById[parent]) openSpace(parent);
+          else location.href = location.pathname;
+        });
+      })
+      .catch(function (err) { toast('No s’ha pogut eliminar: ' + err.message); });
   });
 
   // ------------------------------------------------------------------ separador redimensionable
@@ -1055,7 +1578,7 @@
   // ------------------------------------------------------------------ arrencada
 
   function init() {
-    fetchJson(API.roots)
+    var rootsReady = fetchJson(API.roots)
       .then(function (data) {
         els.treeLoading.hidden = true;
         var drives = data.drives || [];
@@ -1069,22 +1592,30 @@
         els.tree.appendChild(frag);
         els.tree.hidden = false;
         els.tree.firstElementChild.setAttribute('tabindex', '0');
-
-        var params = new URLSearchParams(location.search);
-        var drive = params.get('drive');
-        var path = (params.get('path') || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-        if (drive && state.drives[drive]) {
-          history.replaceState({ drive: drive, path: path, idx: 0 }, '', buildUrl(drive, path));
-          navigate(drive, path, { push: false });
-        } else if (drive) {
-          toast('El disc «' + drive + '» no és a la base de dades.');
-        }
       })
       .catch(function (err) {
         els.treeLoading.hidden = true;
         els.treeEmpty.hidden = false;
         els.treeEmpty.textContent = 'No s’han pogut carregar els discs: ' + err.message;
       });
+
+    Promise.all([rootsReady, loadSpacesTree()]).then(function () {
+      var params = new URLSearchParams(location.search);
+      var spaceParam = params.get('space');
+      var drive = params.get('drive');
+      var path = (params.get('path') || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      if (spaceParam && state.spacesById[spaceParam]) {
+        history.replaceState({ space: Number(spaceParam), idx: 0 }, '', buildSpaceUrl(spaceParam));
+        openSpace(Number(spaceParam), { push: false });
+      } else if (spaceParam) {
+        toast('L’espai «' + spaceParam + '» no existeix.');
+      } else if (drive && state.drives[drive]) {
+        history.replaceState({ drive: drive, path: path, idx: 0 }, '', buildUrl(drive, path));
+        navigate(drive, path, { push: false });
+      } else if (drive) {
+        toast('El disc «' + drive + '» no és a la base de dades.');
+      }
+    });
   }
 
   init();

@@ -125,6 +125,31 @@
 
 {% if search_executed %}
   {% if search_type in ("files", "both") %}
+    <details class="save-space card" {% if editing_space %}open{% endif %}>
+      <summary class="save-space-summary">
+        <svg class="icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v1.2a1 1 0 0 1-.3.7L9.5 9.8V13l-3 1.5V9.8L2.3 5.4a1 1 0 0 1-.3-.7z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        {% if editing_space %}Actualitza l'espai «{{ editing_space.name }}» amb aquests criteris{% else %}Desa aquesta cerca com a espai{% endif %}
+      </summary>
+      <form method="post" action="{{ request.url_for('spaces_save') }}" class="save-space-form">
+        <input type="hidden" name="query_json" value="{{ query_json }}">
+        {% if editing_space %}<input type="hidden" name="space_id" value="{{ editing_space.space_id }}">{% endif %}
+        <label>Nom de l'espai
+          <input type="text" name="name" required maxlength="120" value="{{ editing_space.name if editing_space else default_space_name }}" placeholder="ex: Fotos RAW 2023" autocomplete="off">
+        </label>
+        {% if not editing_space %}
+        <label>Dins de
+          <select name="parent_id">
+            <option value="">— arrel dels espais —</option>
+            {% for s in spaces_flat %}
+            <option value="{{ s.space_id }}">{{ '   ' * s.depth }}{{ s.name }}{% if s.kind == 'smart' %} (cerca){% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {% endif %}
+        <button type="submit" class="btn btn-primary">{% if editing_space %}Actualitza l'espai{% else %}Desa com a espai{% endif %}</button>
+        <p class="form-hint save-space-hint">Un espai intel·ligent repeteix aquesta cerca de fitxers cada vegada que l'obriu a l'Explorador, de manera que s'actualitza sol amb cada escaneig.{% if search_type == "both" %} Només es desen els criteris de fitxers.{% endif %}</p>
+      </form>
+    </details>
     <h2>Fitxers</h2>
     <p><strong>{{ total_files }}</strong> coincidència(s). Pàgina {{ page_files }} de {{ total_pages_files }}.</p>
     {% if rows_files %}
