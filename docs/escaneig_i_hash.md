@@ -9,8 +9,8 @@ layout: default
 
 | Taula | Contingut |
 |-------|-----------|
-| **drives** | Una fitxa per disc (*drive_id*): etiqueta, tipus, ubicació, notes; el maquinari detectat (número de sèrie, model, fabricant, bus, mida del disc físic, estat de salut), el volum (serial, sistema de fitxers, capacitat, espai lliure) i comptadors (fitxers, bytes, fitxers amb hash, últim escaneig i arrel). |
-| **scans** | Un registre per cada escaneig: disc, arrel, mode, inici/fi, estat (`running`, `done`, `aborted`), fitxers nous/modificats/desapareguts, el maquinari vist en aquell moment (sèrie, model, bus, espai lliure, salut) i el nombre d'errors de lectura. |
+| **drives** | Una fitxa per disc (*drive_id*): etiqueta, tipus, ubicació, notes, exclusions; el maquinari detectat (número de sèrie, model, fabricant, bus, mida del disc físic, estat de salut), el volum (serial, sistema de fitxers, capacitat, espai lliure) i comptadors (fitxers, bytes, fitxers amb hash, últim escaneig i arrel). |
+| **scans** | Un registre per cada escaneig: disc, arrel, mode, inici/fi, estat (`running`, `done`, `aborted`), fitxers nous/modificats/desapareguts, el maquinari vist en aquell moment (sèrie, model, bus, espai lliure, salut), les exclusions aplicades i el nombre d'errors de lectura. |
 | **scan_changes** | El detall per fitxer de cada escaneig en mode actualització: ruta, tipus de canvi (`new`, `changed`, `missing`) i mida i data abans i després. És el que mostra la vista «Canvis» de cada disc. |
 | **read_errors** | Carpetes i fitxers que l'escaneig no ha pogut llistar o que el hash no ha pogut obrir: disc, escaneig (buit per als errors del hash), fase, ruta, codi i text de l'error, data. És el que mostra la vista «Errors» de cada disc. |
 | **inventory** | Un fitxer per fila. A més de ruta, nom, extensió, mida i data de modificació: data de creació (`created_utc`) i atributs de Windows (`attributes`), `hash_sha256`, `hashed_utc`, mida i data en el moment del hash, `first_seen_scan`, `last_seen_scan` i `missing_since_utc`. Índex únic per (`drive_id`, `relative_path`). |
@@ -23,6 +23,8 @@ Els fitxers sense extensió tenen `extension = '(no_ext)'`.
 **Versió 5: totes les carpetes i explorador ràpid.** `folder_stats` passa a contenir totes les carpetes, també les que no tenen cap fitxer directe (abans en faltaven 143.503 de 529.179). L'Explorador es construeix sobre `folder_stats` i llegeix els fitxers d'una carpeta per rang de l'índex, així que és complet i respon en mil·lisegons sigui quin sigui el disc. L'índex de hash passa a ser cobridor per als duplicats per contingut. La migració tarda uns 10 s.
 
 **Versió 6: canvis per escaneig, índex de hash per disc i espais virtuals.** `scan_changes` guarda, per a cada escaneig en mode actualització, quins fitxers són nous, quins han canviat (mida o data abans i després) i quins han desaparegut. L'índex parcial `(drive_id, hash_sha256, size_bytes)` permet recórrer els fitxers amb hash d'un disc per als informes de còpia única i de comparació entre discs. Les taules `spaces`, `items`, `space_members`, `tags` i `item_tags` sostenen els espais virtuals (cerques guardades, col·leccions i etiquetes). Tot és additiu: la migració tarda segons i no reescriu dades.
+
+**Versió 8: exclusions per disc.** `drives.exclude_paths` guarda la llista de rutes que l'escaneig no recorre i `scans.exclude_paths` la llista aplicada en cada escaneig, per saber sempre amb quines exclusions es va fer un inventari. Dues columnes: la migració és instantània.
 
 **Versió 7: identitat del disc, errors de lectura, data de creació i atributs.** Cada escaneig detecta el disc físic (número de sèrie, model, bus, mida, salut, amb PowerShell) i l'espai lliure, els guarda a `scans` com a historial i omple els camps buits de la fitxa. Les carpetes i fitxers il·legibles deixen de perdre's en silenci: van a `read_errors`. `inventory` guanya la data de creació i els atributs de Windows, que serveixen per saltar els fitxers que només són al núvol en fer el hash. Només columnes noves i una taula: la migració tarda segons i no reescriu dades.
 
@@ -53,6 +55,8 @@ Des de **Discs** (o programàticament amb `app.audit_to_db.scan_drive`). A la we
 
 A l'arrel del volum s'ignoren `$RECYCLE.BIN` i `System Volume Information` (no formen part de l'arxiu). Els fitxers que hi havia dins, en el primer re-escaneig, quedaran marcats com a desapareguts.
 
+**Exclusions per disc.** Per a discs de sistema (C:) o amb carpetes que no interessen, cada disc pot tenir una llista d'exclusions: rutes relatives a l'arrel de l'escaneig, d'una carpeta (amb tot el que penja) o d'un fitxer concret, per exemple `Windows`, `Users\elmor\AppData` o `pagefile.sys`. La coincidència és exacta, sense distingir majúscules i sense comodins; s'accepten `/` i `\`, i una ruta absoluta sota l'arrel es converteix a relativa. Les rutes buides o amb `..` es rebutgen. La llista es desa a la fitxa del disc i s'aplica a cada escaneig (també als que es llancen amb el botó **Actualitzar**); les carpetes excloses no apareixen a l'inventari ni a les estadístiques de carpetes, i el disc queda marcat a la pàgina **Discs** com a **inventari parcial**, perquè es vegi que no hi és tot. En mode actualització, el que ja era a l'inventari sota una exclusió nova passa a *desaparegut* i la resta conserva els hashes; si més tard es retira l'exclusió, reapareix amb el seu hash. La llista s'edita a la fitxa (una ruta per línia) o al formulari d'escaneig d'un disc nou (si es deixa buit, s'aplica la ja desada), i des del terminal amb `--exclude`, `--exclude-from` i `--clear-excludes`.
+
 **Guarda contra l'arrel equivocada.** En mode actualitzar, si el disc tenia 1.000 fitxers o més i menys del 10 % apareixen al nou recorregut, l'escaneig s'atura sense tocar res. Passa típicament si s'ha triat una altra unitat, o una arrel diferent de la de l'escaneig anterior (SSD-1 i SSD-2 es van escanejar des d'una subcarpeta: `E:\REGISTRE23` i `E:\BACK_SSDEX`, no des de `E:\`). Si realment vols substituir l'inventari, usa **Reiniciar** o `--force`.
 
 **Fitxers desapareguts.** Cercar, Duplicats i Explorador només mostren fitxers presents a l'últim escaneig. A Cercar hi ha la casella *Incloure fitxers desapareguts* (opcions avançades) per trobar-ne un que ja no hi és: apareix marcat com a *(desaparegut)*.
@@ -75,7 +79,14 @@ Per a discs grans és més còmode veure el progrés al terminal:
 python tools/scan_drive.py --drive EXT-A --root F:\
 python tools/scan_drive.py --drive NOU-1 --root G:\ --kind hdd --label "Toshiba 4TB"
 python tools/scan_drive.py --drive EXT-A --replace      # reinicia (perd hashes)
+
+# exclusions: s'afegeixen a la llista desada a la fitxa i la guarden
+python tools/scan_drive.py --drive PC-C --root C:\ --exclude Windows --exclude pagefile.sys
+python tools/scan_drive.py --drive PC-C --exclude-from exclusions.txt   # una ruta per línia (UTF-8, # comentaris)
+python tools/scan_drive.py --drive PC-C --clear-excludes                # buida la llista i escaneja
 ```
+
+Per a noms amb `$` o espais (`$SysReset`, `Program Files`) és més còmode `--exclude-from` que lluitar amb les cometes del terminal.
 
 ## Calcular hashes (SHA-256)
 
