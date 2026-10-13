@@ -9,10 +9,11 @@ layout: default
 
 | Taula | Contingut |
 |-------|-----------|
-| **drives** | Una fitxa per disc (*drive_id*): etiqueta, tipus, model, serial del volum, capacitat, estat, notes, i comptadors (fitxers, bytes, fitxers amb hash, últim escaneig i arrel). |
-| **scans** | Un registre per cada escaneig: disc, arrel, mode, inici/fi, estat (`running`, `done`, `aborted`), fitxers nous/modificats/desapareguts. |
+| **drives** | Una fitxa per disc (*drive_id*): etiqueta, tipus, ubicació, notes; el maquinari detectat (número de sèrie, model, fabricant, bus, mida del disc físic, estat de salut), el volum (serial, sistema de fitxers, capacitat, espai lliure) i comptadors (fitxers, bytes, fitxers amb hash, últim escaneig i arrel). |
+| **scans** | Un registre per cada escaneig: disc, arrel, mode, inici/fi, estat (`running`, `done`, `aborted`), fitxers nous/modificats/desapareguts, el maquinari vist en aquell moment (sèrie, model, bus, espai lliure, salut) i el nombre d'errors de lectura. |
 | **scan_changes** | El detall per fitxer de cada escaneig en mode actualització: ruta, tipus de canvi (`new`, `changed`, `missing`) i mida i data abans i després. És el que mostra la vista «Canvis» de cada disc. |
-| **inventory** | Un fitxer per fila. A més de ruta, nom, extensió, mida i data: `hash_sha256`, `hashed_utc`, mida i data en el moment del hash, `first_seen_scan`, `last_seen_scan` i `missing_since_utc`. Índex únic per (`drive_id`, `relative_path`). |
+| **read_errors** | Carpetes i fitxers que l'escaneig no ha pogut llistar o que el hash no ha pogut obrir: disc, escaneig (buit per als errors del hash), fase, ruta, codi i text de l'error, data. És el que mostra la vista «Errors» de cada disc. |
+| **inventory** | Un fitxer per fila. A més de ruta, nom, extensió, mida i data de modificació: data de creació (`created_utc`) i atributs de Windows (`attributes`), `hash_sha256`, `hashed_utc`, mida i data en el moment del hash, `first_seen_scan`, `last_seen_scan` i `missing_since_utc`. Índex únic per (`drive_id`, `relative_path`). |
 | **folder_stats**, **by_extension** | Agregats per carpeta (ruta relativa a l'arrel escanejada; totes les carpetes, amb recomptes de fitxers directes) i per extensió. Es recalculen a cada escaneig. |
 
 Els fitxers sense extensió tenen `extension = '(no_ext)'`.
@@ -22,6 +23,8 @@ Els fitxers sense extensió tenen `extension = '(no_ext)'`.
 **Versió 5: totes les carpetes i explorador ràpid.** `folder_stats` passa a contenir totes les carpetes, també les que no tenen cap fitxer directe (abans en faltaven 143.503 de 529.179). L'Explorador es construeix sobre `folder_stats` i llegeix els fitxers d'una carpeta per rang de l'índex, així que és complet i respon en mil·lisegons sigui quin sigui el disc. L'índex de hash passa a ser cobridor per als duplicats per contingut. La migració tarda uns 10 s.
 
 **Versió 6: canvis per escaneig, índex de hash per disc i espais virtuals.** `scan_changes` guarda, per a cada escaneig en mode actualització, quins fitxers són nous, quins han canviat (mida o data abans i després) i quins han desaparegut. L'índex parcial `(drive_id, hash_sha256, size_bytes)` permet recórrer els fitxers amb hash d'un disc per als informes de còpia única i de comparació entre discs. Les taules `spaces`, `items`, `space_members`, `tags` i `item_tags` sostenen els espais virtuals (cerques guardades, col·leccions i etiquetes). Tot és additiu: la migració tarda segons i no reescriu dades.
+
+**Versió 7: identitat del disc, errors de lectura, data de creació i atributs.** Cada escaneig detecta el disc físic (número de sèrie, model, bus, mida, salut, amb PowerShell) i l'espai lliure, els guarda a `scans` com a historial i omple els camps buits de la fitxa. Les carpetes i fitxers il·legibles deixen de perdre's en silenci: van a `read_errors`. `inventory` guanya la data de creació i els atributs de Windows, que serveixen per saltar els fitxers que només són al núvol en fer el hash. Només columnes noves i una taula: la migració tarda segons i no reescriu dades.
 
 **Versió 4: índex per a duplicats.** L'índex de nom se substitueix per un índex parcial cobridor sobre nom, mida, disc i extensió dels fitxers presents. Els duplicats per nom i per nom+mida es resolen recorrent només l'índex (d'uns 11 s per pàgina a uns 2 s amb 4,8 M de fitxers), i la DB només creix uns 50 MB.
 
@@ -58,6 +61,12 @@ El recorregut usa `os.scandir` (a Windows mida i data venen amb el llistat, sens
 
 Cada escaneig registra el serial del volum a `drives.volume_serial`. Si en un escaneig posterior el volum muntat té un serial diferent, s'atura amb un missatge (probable disc equivocat, per exemple dos discs externs que es munten a la mateixa lletra). Si realment és el mateix *drive_id* reformatat o un disc nou, usa **Reiniciar el disc** (o `--force` al CLI).
 
+**Identitat física del disc.** A més del volum, l'escaneig demana a Windows (PowerShell `Get-Disk`) el número de sèrie, el model, el fabricant, el bus (NVMe, SATA, USB…), la mida del disc físic i l'estat de salut, i mesura l'espai lliure. Tot això queda a `scans` (el que s'ha vist en cada escaneig) i a la fitxa del disc, on només s'omplen els camps buits: el que escrius tu a la fitxa es conserva, i si el tipus de suport és clar (HDD o SSD) s'omple `kind` quan era buit. Espai lliure i salut es refresquen a cada escaneig. Si el número de sèrie registrat no coincideix amb el detectat, l'escaneig s'atura igual que amb el serial del volum. Les carcasses USB sovint no deixen veure la sèrie real i en tornen una de buida o genèrica (per exemple `0123456789ABCDEF` amb model «Generic DISK»): es guarda a l'historial tal com s'ha vist, però no es fa servir com a identitat ni bloqueja res. Fora de Windows, en rutes de xarxa o si PowerShell falla, els camps queden buits i l'escaneig continua.
+
+**Carpetes i fitxers il·legibles.** Si una carpeta no es pot llistar (permisos, disc amb sectors dolents, noms estranys) o una entrada no es pot consultar, l'escaneig continua però ho registra a `read_errors` amb la fase, el codi i el text de l'error. El missatge final ho diu, la taula d'escaneigs té la columna «Errors» i la fitxa del disc enllaça a la vista **Errors**, on es poden filtrar per escaneig i per fase. Els errors del càlcul del hash també hi van.
+
+**Rutes llargues.** L'escaneig i el hash recorren el disc amb el prefix `\\?\` (i `\\?\UNC\` per a rutes de xarxa), així que les rutes de més de 260 caràcters s'inventarien i s'obren igualment, sense dependre de la política *LongPathsEnabled* de Windows. A la base de dades les rutes es guarden sense prefix.
+
 ### Escanejar des del terminal
 
 Per a discs grans és més còmode veure el progrés al terminal:
@@ -87,6 +96,9 @@ python tools/hash_files.py --drive EXT-B --only-size-dupes
 
 # SSD / NVMe: diversos fils
 python tools/hash_files.py --drive SSD-2 --root E:\BACK_SSDEX --workers 4
+
+# també els fitxers que només són al núvol (en força la descàrrega)
+python tools/hash_files.py --drive PC-D --include-cloud
 ```
 
 Comportament:
@@ -94,7 +106,9 @@ Comportament:
 - Només tracta files sense hash (noves o invalidades per un re-escaneig). Es pot aturar amb **Ctrl+C**: el lot en curs es desa i la propera execució continua on era.
 - Llegeix en ordre de ruta (localitat al disc), amb buffer de 8 MiB. Els fitxers de 0 bytes reben el hash constant sense obrir-se.
 - Si un fitxer ha canviat des de l'escaneig, s'actualitzen mida i data juntament amb el hash. Si ha desaparegut, es marca.
-- Si el serial del volum no coincideix amb el registrat per aquell *drive_id*, s'atura (`--force` per ometre la comprovació).
+- Si el serial del volum o el número de sèrie del disc no coincideixen amb els registrats per aquell *drive_id*, s'atura (`--force` per ometre la comprovació).
+- **Fitxers només al núvol.** Els fitxers «sota demanda» de OneDrive i similars (atributs OFFLINE, RECALL_ON_OPEN o RECALL_ON_DATA_ACCESS, registrats a `inventory.attributes` per l'escaneig) se salten per defecte, perquè llegir-los en forçaria la descàrrega. Es compten a part al missatge final i a la columna «núvol» de `--status`. Amb `--include-cloud` es hashegen.
+- **Errors de lectura.** Els fitxers que no es poden obrir (permisos, sectors dolents) es mostren per pantalla i queden a `read_errors`, un registre per fitxer que es reescriu a cada execució; es consulten a la vista **Errors** de la fitxa del disc.
 - `--workers 1` (per defecte) és el millor per a discs mecànics; amb SSD o NVMe `--workers 4` o `8` multiplica la velocitat.
 
 ### Estratègia recomanada per a molts TB
