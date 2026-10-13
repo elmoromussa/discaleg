@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import schema  # noqa: E402
-from app.audit_to_db import error_code, error_text  # noqa: E402
+from app.audit_to_db import error_code, error_text, long_path  # noqa: E402
 from app.config import database_path  # noqa: E402
 from app.disk_info import get_physical_disk_info, identity_serial  # noqa: E402
 from app.volume_info import get_volume_info  # noqa: E402
@@ -203,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, on_sigint)
 
     t0 = time.time()
+    root_long = long_path(root)  # rutes de més de 260 caràcters sense dependre de LongPathsEnabled
     deadline = t0 + args.max_minutes * 60 if args.max_minutes > 0 else None
     done_files = done_bytes = 0
     n_missing = n_errors = 0
@@ -228,9 +229,9 @@ def main(argv: list[str] | None = None) -> int:
                     break
                 batch = rows[i:i + args.batch]
                 if pool:
-                    results = list(pool.map(lambda r: _hash_one(root, r), batch))
+                    results = list(pool.map(lambda r: _hash_one(root_long, r), batch))
                 else:
-                    results = [_hash_one(root, r) for r in batch]
+                    results = [_hash_one(root_long, r) for r in batch]
                 now = schema.utc_now_iso()
                 upd: list[tuple] = []
                 miss: list[tuple] = []

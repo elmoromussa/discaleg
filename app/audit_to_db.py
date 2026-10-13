@@ -95,6 +95,23 @@ def _utc_iso(ts: float) -> str:
         return ""
 
 
+def long_path(path: str) -> str:
+    """Ruta absoluta amb el prefix \\\\?\\ (o \\\\?\\UNC\\ per a rutes de xarxa) a Windows.
+
+    Permet recórrer i obrir rutes de més de 260 caràcters sense dependre de la política
+    LongPathsEnabled. Només per a crides al sistema: el que es guarda a la DB (root_path,
+    last_root_path, relative_path) continua sense prefix.
+    """
+    if os.name != "nt":
+        return path
+    p = os.path.abspath(path)
+    if p.startswith("\\\\?\\"):
+        return p
+    if p.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + p[2:]
+    return "\\\\?\\" + p
+
+
 def _extension(name: str) -> str:
     i = name.rfind(".")
     if 0 < i < len(name) - 1:
@@ -285,7 +302,7 @@ def scan_drive(
         errors.append((phase, rel, error_code(e), error_text(e)))
 
     try:
-        for rel_dir, name, size, mtime in _walk(root, progress, on_error):
+        for rel_dir, name, size, mtime in _walk(long_path(root), progress, on_error):
             if name is None:
                 folder_agg[rel_dir]  # registra la carpeta encara que no tingui fitxers
                 continue
