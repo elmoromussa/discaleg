@@ -14,6 +14,7 @@ import json
 import sqlite3
 from typing import Any
 
+from app.queries import SPACE_ITEMS_SQL, TAG_ITEMS_SQL, folder_range, items_resolution_sql
 from app.schema import utc_now_iso
 from app.search_params import parse_search_params, run_file_search
 
@@ -224,6 +225,291 @@ def delete_space(conn: sqlite3.Connection, space_id: int) -> int:
     conn.execute(f"DELETE FROM spaces WHERE space_id IN ({ph})", ids)
     conn.commit()
     return len(ids)
+
+
+# ---------------------------------------------------------------------------
+# Elements (identitat), pertinences i etiquetes
+# ---------------------------------------------------------------------------
+
+ITEM_KINDS = ("file", "folder")
+TAG_COLORS = ("#e57373", "#ffb74d", "#fff176", "#81c784", "#4fc3f7", "#7986cb", "#ba68c8", "#a1887f")
+
+
+def _to_db_path(path: str) -> str:
+    return (path or "").replace("/", "\\").strip("\\")
+
+
+def upsert_items(conn: sqlite3.Connection, specs: list[dict[str, Any]]) -> tuple[list[int], list[str]]:
+    """Dona d'alta (o retroba) els elements descrits per [{kind, drive_id, path}] (ruta en format API).
+
+    Fitxer: llegeix nom, mida i hash d'inventory (identitat per hash si en té). Carpeta: un sol
+    element amb el rang de prefix (mai fitxer a fitxer). Retorna (item_ids, errors).
+    """
+    ids: list[int] = []
+    errors: list[str] = []
+    now = utc_now_iso()
+    for spec in specs:
+        kind = (spec.get("kind") or "").strip()
+        drive_id = (spec.get("drive_id") or "").strip()
+        path_db = _to_db_path(spec.get("path") or "")
+        if kind not in ITEM_KINDS or not drive_id:
+            errors.append(f"Element no vàlid: {spec!r}")
+            continue
+        if kind == "file":
+            row = conn.execute(
+                "SELECT name, size_bytes, hash_sha256 FROM inventory WHERE drive_id = ? AND relative_path = ?",
+                (drive_id, path_db),
+            ).fetchone()
+            if row is None:
+                errors.append(f"{drive_id}: el fitxer «{path_db}» no és a l'inventari.")
+                continue
+            name, size, h = row[0], row[1], row[2]
+            lo = hi = None
+        else:
+            if not path_db:
+                errors.append(f"{drive_id}: no es pot afegir l'arrel sencera d'un disc com a carpeta.")
+                continue
+            exists = conn.execute(
+                "SELECT 1 FROM folder_stats WHERE drive_id = ? AND folder_path = ? LIMIT 1", (drive_id, path_db)
+            ).fetchone()
+            if exists is None:
+                errors.append(f"{drive_id}: la carpeta «{path_db}» no és a l'inventari.")
+                continue
+            name = path_db.rsplit("\\", 1)[-1]
+            size = None
+            h = None
+            lo, hi = folder_range(path_db)  # type: ignore[misc]
+        cur = conn.execute(
+            """
+            INSERT INTO items (kind, drive_id, relative_path, hash_sha256, size_bytes, name,
+                               range_lo, range_hi, created_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kind, drive_id, relative_path) DO UPDATE SET
+                hash_sha256 = COALESCE(excluded.hash_sha256, items.hash_sha256),
+                size_bytes = COALESCE(excluded.size_bytes, items.size_bytes),
+                name = COALESCE(excluded.name, items.name)
+            RETURNING item_id
+            """,
+            (kind, drive_id, path_db, h, size, name, lo, hi, now),
+        )
+        ids.append(int(cur.fetchone()[0]))
+    return ids, errors
+
+
+def refresh_item_hashes(conn: sqlite3.Connection) -> int:
+    """Completa el hash dels elements fitxer que encara no en tenien quan el hash ja existeix.
+
+    La taula items és petita i la cerca va per l'índex únic (drive_id, relative_path): ms.
+    """
+    cur = conn.execute(
+        """
+        UPDATE items SET hash_sha256 = (
+            SELECT i.hash_sha256 FROM inventory i
+            WHERE i.drive_id = items.drive_id AND i.relative_path = items.relative_path)
+        WHERE kind = 'file' AND hash_sha256 IS NULL AND EXISTS (
+            SELECT 1 FROM inventory i
+            WHERE i.drive_id = items.drive_id AND i.relative_path = items.relative_path
+              AND i.hash_sha256 IS NOT NULL)
+        """
+    )
+    return cur.rowcount
+
+
+def add_members(conn: sqlite3.Connection, space_id: int, specs: list[dict[str, Any]]) -> dict[str, Any]:
+    space = get_space(conn, space_id)
+    if space is None:
+        raise SpaceError("L'espai no existeix.")
+    if space["kind"] != "manual":
+        raise SpaceError("Només es poden afegir elements a una col·lecció (no a una cerca desada).")
+    ids, errors = upsert_items(conn, specs)
+    now = utc_now_iso()
+    added = 0
+    for item_id in ids:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO space_members (space_id, item_id, added_utc) VALUES (?, ?, ?)",
+            (space_id, item_id, now),
+        )
+        added += cur.rowcount
+    conn.execute("UPDATE spaces SET updated_utc = ? WHERE space_id = ?", (now, space_id))
+    conn.commit()
+    return {"added": added, "already": len(ids) - added, "errors": errors, "item_ids": ids}
+
+
+def remove_member(conn: sqlite3.Connection, space_id: int, item_id: int) -> bool:
+    cur = conn.execute(
+        "DELETE FROM space_members WHERE space_id = ? AND item_id = ?", (space_id, item_id)
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def count_members(conn: sqlite3.Connection, space_id: int) -> int:
+    return int(conn.execute(
+        "SELECT COUNT(*) FROM space_members WHERE space_id = ?", (space_id,)).fetchone()[0])
+
+
+def list_tags(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    cur = conn.execute(
+        """
+        SELECT t.tag_id, t.name, t.color, t.created_utc,
+               (SELECT COUNT(*) FROM item_tags it WHERE it.tag_id = t.tag_id) AS items_count
+        FROM tags t ORDER BY t.name COLLATE NOCASE
+        """
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def get_tag(conn: sqlite3.Connection, tag_id: int) -> dict[str, Any] | None:
+    r = conn.execute(
+        "SELECT tag_id, name, color, created_utc FROM tags WHERE tag_id = ?", (tag_id,)
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def _clean_tag_name(name: str | None) -> str:
+    n = " ".join((name or "").split())
+    if not n:
+        raise SpaceError("Cal un nom per a l'etiqueta.")
+    return n[:60]
+
+
+def create_tag(conn: sqlite3.Connection, name: str, color: str | None = None) -> dict[str, Any]:
+    name = _clean_tag_name(name)
+    existing = conn.execute("SELECT tag_id FROM tags WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+    if existing:
+        return get_tag(conn, int(existing[0]))  # type: ignore[return-value]
+    if not color:
+        n = int(conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0])
+        color = TAG_COLORS[n % len(TAG_COLORS)]
+    cur = conn.execute(
+        "INSERT INTO tags (name, color, created_utc) VALUES (?, ?, ?)", (name, color, utc_now_iso())
+    )
+    conn.commit()
+    return get_tag(conn, int(cur.lastrowid))  # type: ignore[return-value]
+
+
+def update_tag(conn: sqlite3.Connection, tag_id: int, name: Any = _UNSET, color: Any = _UNSET) -> dict[str, Any]:
+    if get_tag(conn, tag_id) is None:
+        raise SpaceError("L'etiqueta no existeix.")
+    sets: list[str] = []
+    params: list[Any] = []
+    if name is not _UNSET:
+        n = _clean_tag_name(name)
+        dup = conn.execute(
+            "SELECT tag_id FROM tags WHERE name = ? COLLATE NOCASE AND tag_id <> ?", (n, tag_id)
+        ).fetchone()
+        if dup:
+            raise SpaceError(f"Ja hi ha una etiqueta anomenada «{n}».")
+        sets.append("name = ?")
+        params.append(n)
+    if color is not _UNSET:
+        sets.append("color = ?")
+        params.append(color or None)
+    if sets:
+        conn.execute(f"UPDATE tags SET {', '.join(sets)} WHERE tag_id = ?", params + [tag_id])
+        conn.commit()
+    return get_tag(conn, tag_id)  # type: ignore[return-value]
+
+
+def delete_tag(conn: sqlite3.Connection, tag_id: int) -> bool:
+    conn.execute("DELETE FROM item_tags WHERE tag_id = ?", (tag_id,))
+    cur = conn.execute("DELETE FROM tags WHERE tag_id = ?", (tag_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def tag_items(conn: sqlite3.Connection, tag_id: int, specs: list[dict[str, Any]]) -> dict[str, Any]:
+    if get_tag(conn, tag_id) is None:
+        raise SpaceError("L'etiqueta no existeix.")
+    ids, errors = upsert_items(conn, specs)
+    now = utc_now_iso()
+    added = 0
+    for item_id in ids:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO item_tags (item_id, tag_id, added_utc) VALUES (?, ?, ?)",
+            (item_id, tag_id, now),
+        )
+        added += cur.rowcount
+    conn.commit()
+    return {"added": added, "already": len(ids) - added, "errors": errors, "item_ids": ids}
+
+
+def untag_items(conn: sqlite3.Connection, tag_id: int, specs: list[dict[str, Any]] | None = None,
+                item_ids: list[int] | None = None) -> int:
+    ids = list(item_ids or [])
+    if specs:
+        for spec in specs:
+            r = conn.execute(
+                "SELECT item_id FROM items WHERE kind = ? AND drive_id = ? AND relative_path = ?",
+                (spec.get("kind"), spec.get("drive_id"), _to_db_path(spec.get("path") or "")),
+            ).fetchone()
+            if r:
+                ids.append(int(r[0]))
+    n = 0
+    for item_id in ids:
+        n += conn.execute(
+            "DELETE FROM item_tags WHERE tag_id = ? AND item_id = ?", (tag_id, item_id)
+        ).rowcount
+    conn.commit()
+    return n
+
+
+def tags_of(conn: sqlite3.Connection, kind: str, drive_id: str, path: str) -> list[int]:
+    """Etiquetes (ids) d'un element concret, si existeix a `items`."""
+    rows = conn.execute(
+        """
+        SELECT it.tag_id FROM items t JOIN item_tags it ON it.item_id = t.item_id
+        WHERE t.kind = ? AND t.drive_id = ? AND t.relative_path = ?
+        """,
+        (kind, drive_id, _to_db_path(path)),
+    ).fetchall()
+    return [int(r[0]) for r in rows]
+
+
+def _resolved_contents(
+    conn: sqlite3.Connection,
+    source_sql: str,
+    source_param: Any,
+    limit: int,
+    offset: int,
+    sort: str | None,
+    direction: str | None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Pàgina dels fitxers resolts d'una font d'elements, amb el motiu i l'element d'origen."""
+    sort_col = CONTENT_SORT_KEYS.get(sort or "", "name")
+    sort_dir = "DESC" if direction == "desc" else "ASC"
+    cur = conn.execute(
+        f"""
+        SELECT i.id, i.drive_id, i.relative_path, i.name, i.extension, i.size_bytes, i.modified_utc,
+               i.missing_since_utc, i.hash_sha256, h.item_id, h.reason,
+               t.kind AS item_kind, t.drive_id AS item_drive, t.relative_path AS item_path,
+               COUNT(*) OVER () AS _total
+        FROM ({items_resolution_sql(source_sql)}) h
+        JOIN inventory i ON i.id = h.id
+        JOIN items t ON t.item_id = h.item_id
+        ORDER BY i.{sort_col} {sort_dir}, i.drive_id, i.relative_path
+        LIMIT ? OFFSET ?
+        """,
+        (source_param, source_param, source_param, limit, offset),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    total = int(rows[0].pop("_total")) if rows else 0
+    for r in rows[1:]:
+        r.pop("_total", None)
+    if not rows and offset > 0:
+        total = int(conn.execute(
+            f"SELECT COUNT(*) FROM ({items_resolution_sql(source_sql)})",
+            (source_param, source_param, source_param),
+        ).fetchone()[0])
+    return rows, total
+
+
+def get_manual_contents(conn, space, limit, offset, sort=None, direction=None):
+    return _resolved_contents(conn, SPACE_ITEMS_SQL, space["space_id"], limit, offset, sort, direction)
+
+
+def get_tag_contents(conn, tag_id, limit, offset, sort=None, direction=None):
+    return _resolved_contents(conn, TAG_ITEMS_SQL, tag_id, limit, offset, sort, direction)
 
 
 def get_smart_contents(

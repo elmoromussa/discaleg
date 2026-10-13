@@ -31,6 +31,9 @@
   <symbol id="i-pencil" viewBox="0 0 16 16"><path d="m2.5 11.5 8-8 2 2-8 8H2.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="m9 5 2 2" stroke="currentColor" stroke-width="1.3"/></symbol>
   <symbol id="i-move" viewBox="0 0 16 16"><path d="M8 2v12M2 8h12M5.5 4.5 8 2l2.5 2.5M5.5 11.5 8 14l2.5-2.5M4.5 5.5 2 8l2.5 2.5M11.5 5.5 14 8l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-trash" viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 16 16"><path d="M2 2.5h5.5l6.5 6.5-5.5 5.5L2 8z" fill="var(--tag-fill, none)" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="5.2" cy="5.7" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="m3 8.5 3.2 3L13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-minus-circle" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-filter" viewBox="0 0 16 16"><path d="M2 3.5h12M4.5 8h7M7 12.5h2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-search-folder" viewBox="0 0 16 16"><path d="M1.5 4.5A1.5 1.5 0 0 1 3 3h3.2l1.6 1.6H13A1.5 1.5 0 0 1 14.5 6v1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 4.5V12A1.5 1.5 0 0 0 3 13.5h4" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="11" cy="11" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="m13 13 2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol>
   <symbol id="i-folder-empty" viewBox="0 0 48 48"><path d="M5 14a4 4 0 0 1 4-4h10l5 5h15a4 4 0 0 1 4 4v18a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M17 29h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
@@ -110,6 +113,7 @@
             <th scope="col" class="col-name"><button type="button" class="explorer-sort" data-sort="name">Nom</button></th>
             <th scope="col" class="col-drive"><button type="button" class="explorer-sort" data-sort="drive">Disc</button></th>
             <th scope="col" class="col-folder"><button type="button" class="explorer-sort" data-sort="folder">Carpeta</button></th>
+            <th scope="col" class="col-reason" title="Per què és a l'espai: còpia per contingut, referència per disc i ruta, o dins d'una carpeta afegida">Motiu</th>
             <th scope="col" class="col-type"><button type="button" class="explorer-sort" data-sort="type">Tipus</button></th>
             <th scope="col" class="col-items"><button type="button" class="explorer-sort" data-sort="items" title="Fitxers que conté (incloent-hi subcarpetes)">Elements</button></th>
             <th scope="col" class="col-size"><button type="button" class="explorer-sort" data-sort="size">Mida</button></th>
@@ -132,6 +136,36 @@
 
 <div class="explorer-toast" id="explorer-toast" role="status" aria-live="polite" hidden></div>
 <div class="explorer-menu" id="explorer-menu" role="menu" aria-label="Accions" hidden></div>
+
+<dialog class="explorer-dialog" id="explorer-add-dialog" aria-labelledby="explorer-add-title">
+  <form method="dialog" class="explorer-dialog-form" id="explorer-add-form">
+    <h2 class="explorer-dialog-title" id="explorer-add-title">Afegeix a…</h2>
+    <p class="explorer-dialog-sub" id="explorer-add-sub"></p>
+    <div class="explorer-dialog-cols">
+      <section class="explorer-dialog-section" aria-labelledby="explorer-add-spaces-title">
+        <h3 id="explorer-add-spaces-title"><svg class="icon" aria-hidden="true"><use href="#i-space"/></svg> Col·lecció</h3>
+        <div class="explorer-dialog-list" id="explorer-add-spaces" role="radiogroup" aria-label="Col·lecció de destinació"></div>
+        <label class="explorer-dialog-new">
+          <span>Nova col·lecció</span>
+          <input type="text" id="explorer-add-new-space" placeholder="Nom (opcional)" maxlength="120" autocomplete="off">
+        </label>
+      </section>
+      <section class="explorer-dialog-section" aria-labelledby="explorer-add-tags-title">
+        <h3 id="explorer-add-tags-title"><svg class="icon" aria-hidden="true"><use href="#i-tag"/></svg> Etiquetes</h3>
+        <div class="explorer-dialog-list" id="explorer-add-tags" role="group" aria-label="Etiquetes"></div>
+        <label class="explorer-dialog-new">
+          <span>Nova etiqueta</span>
+          <input type="text" id="explorer-add-new-tag" placeholder="Nom (opcional)" maxlength="60" autocomplete="off">
+        </label>
+      </section>
+    </div>
+    <p class="explorer-dialog-hint">Els fitxers s'identifiquen pel contingut (hash) quan en tenen, i si no pel disc i la ruta; les carpetes entren senceres, com un sol element. Res no es mou dels discs.</p>
+    <div class="explorer-dialog-actions">
+      <button type="button" class="btn btn-secondary" id="explorer-add-cancel">Cancel·la</button>
+      <button type="submit" class="btn btn-primary" id="explorer-add-ok">Afegeix</button>
+    </div>
+  </form>
+</dialog>
 
 <script src="{{ static_url(request, 'explorer.js') }}"></script>
 {% endblock %}

@@ -198,6 +198,41 @@ def folder_range(path_db: str) -> tuple[str, str] | None:
     return prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1)
 
 
+def items_resolution_sql(source_sql: str) -> str:
+    """SQL que resol els `items` d'una font (subconsulta d'item_id) a files d'inventory.
+
+    Retorna (id, item_id, reason) amb reason 'hash' (còpies per contingut, a qualsevol disc,
+    presents), 'path' (fitxer sense hash, per disc+ruta; també si ha desaparegut) o 'folder'
+    (dins del prefix d'una carpeta, presents). Tres branques, cadascuna per un índex:
+    idx_inventory_hash_size, ux_inventory_drive_path (igualtat) i ux_inventory_drive_path
+    (rang). CROSS JOIN fixa `items` (petita) com a bucle exterior: amb estadístiques velles el
+    planificador recorria sencer l'índex de hash. S'agrupa per id perquè un fitxer pot entrar
+    per més d'una via.
+    """
+    # Si un fitxer entra per més d'una via, guanya la més directa (prio més baixa): item_id i
+    # reason surten de la mateixa fila gràcies a les columnes nues amb MIN() de SQLite.
+    return f"""
+        SELECT id, item_id, reason, MIN(prio) AS prio FROM (
+            SELECT i.id, t.item_id, 'hash' AS reason, 1 AS prio
+            FROM items t CROSS JOIN inventory i ON i.hash_sha256 = t.hash_sha256
+            WHERE t.item_id IN ({source_sql}) AND t.kind = 'file' AND t.hash_sha256 IS NOT NULL
+              AND i.missing_since_utc IS NULL
+            UNION ALL
+            SELECT i.id, t.item_id, 'path', 2
+            FROM items t CROSS JOIN inventory i ON i.drive_id = t.drive_id AND i.relative_path = t.relative_path
+            WHERE t.item_id IN ({source_sql}) AND t.kind = 'file' AND t.hash_sha256 IS NULL
+            UNION ALL
+            SELECT i.id, t.item_id, 'folder', 3
+            FROM items t CROSS JOIN inventory i ON i.drive_id = t.drive_id
+                 AND i.relative_path >= t.range_lo AND i.relative_path < t.range_hi
+            WHERE t.item_id IN ({source_sql}) AND t.kind = 'folder' AND i.missing_since_utc IS NULL
+        ) GROUP BY id"""
+
+
+TAG_ITEMS_SQL = "SELECT item_id FROM item_tags WHERE tag_id = ?"
+SPACE_ITEMS_SQL = "SELECT item_id FROM space_members WHERE space_id = ?"
+
+
 # Per sota d'aquest nombre de fitxers, una cerca dins d'una carpeta no fa servir la poda FTS.
 FTS_SCOPE_MIN_FILES = 200_000
 
@@ -232,6 +267,7 @@ def _build_search_inventory_where(
     fts_match: str | None = None,
     in_drive: str | None = None,
     in_path_db: str | None = None,
+    tag_id: int | None = None,
 ) -> tuple[str, list]:
     """Construïx WHERE per search_inventory.
     - flex_like_terms: cada terme (name OR relative_path), tots amb AND (mode «nom o ruta»).
@@ -255,10 +291,14 @@ def _build_search_inventory_where(
                 "(" + " AND ".join(["relative_path LIKE ?"] * len(path_like_terms)) + ")"
             )
             params.extend(path_like_terms)
-    elif not in_drive:
+    elif not in_drive and tag_id is None:
         main_parts.append("1 = 0")
 
     conditions = [" AND ".join(main_parts)] if main_parts else []
+    if tag_id is not None:
+        # fitxers etiquetats (resolts per hash, ruta o carpeta); va primer: la llista és petita
+        conditions.insert(0, f"id IN (SELECT id FROM ({items_resolution_sql(TAG_ITEMS_SQL)}))")
+        params = [tag_id, tag_id, tag_id] + params
     if fts_match:
         # poda per índex FTS5 (trigram): el LIKE de dalt continua fent el filtre exacte
         conditions.insert(0, "id IN (SELECT rowid FROM inventory_fts WHERE inventory_fts MATCH ?)")
@@ -311,12 +351,14 @@ def search_inventory(
     include_missing: bool = False,
     in_drive: str | None = None,
     in_path: str | None = None,
+    tag_id: int | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Cerca a inventory. Mode flex: cada terme en (name OR path), AND entre termes.
     Mode eixos: name_terms i path_terms es combinen amb AND (llistes buides = sense filtre en aquell eix).
     No combineu flex amb eixos en la mateixa crida (flex té prioritat si no és buit).
     in_drive + in_path (format API, «/»): limita la cerca a una carpeta d'un disc; sense termes,
-    llista tots els fitxers de la carpeta (recursivament)."""
+    llista tots els fitxers de la carpeta (recursivament). tag_id: només fitxers amb l'etiqueta
+    (resolts per hash, ruta o carpeta); sense termes, tots els etiquetats."""
     exclude_terms = exclude_terms or []
     name_terms = list(name_terms or [])
     path_terms = list(path_terms or [])
@@ -330,7 +372,7 @@ def search_inventory(
         like_path: list[str] = []
     else:
         like_flex = []
-        if not name_terms and not path_terms and not in_drive:
+        if not name_terms and not path_terms and not in_drive and tag_id is None:
             return [], 0
         like_name = [_search_term_to_like_pattern(t) for t in name_terms]
         like_path = [_search_term_to_like_pattern(t) for t in path_terms]
@@ -352,6 +394,7 @@ def search_inventory(
         fts_match,
         in_drive,
         in_path_db,
+        tag_id,
     )
     params_count = list(params)
     if sort_by and sort_by in SEARCH_INVENTORY_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):

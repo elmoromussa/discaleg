@@ -33,6 +33,13 @@
       <span class="form-hint">Sense cap terme es llisten tots els fitxers de la carpeta i les subcarpetes. El filtre de discs de sota s'ignora.</span>
     </div>
     {% endif %}
+    {% if tag_id %}
+    <div class="search-scope" role="status">
+      <span class="search-scope-label">Etiqueta</span>
+      <span class="search-scope-chip">{% for t in tags %}{% if t.tag_id == tag_id %}<strong>{{ t.name }}</strong>{% endif %}{% endfor %}</span>
+      <a class="search-scope-clear" href="{{ request.url.remove_query_params(['tag_id', 'page', 'page_f']) }}" title="Treu el filtre d'etiqueta" aria-label="Treu el filtre d'etiqueta">✕</a>
+    </div>
+    {% endif %}
     <fieldset class="advanced-search-fieldset">
       <legend>Cerca bàsica</legend>
       <div class="form-group">
@@ -98,6 +105,18 @@
           <label for="min_size_mb">Mida mínima (MB)</label>
           <input type="number" name="min_size_mb" id="min_size_mb" value="{{ min_size_mb }}" placeholder="Opcional" min="0" step="0.1">
         </div>
+        {% if tags %}
+        <div class="form-group">
+          <label for="tag_id">Només fitxers amb l'etiqueta</label>
+          <select name="tag_id" id="tag_id">
+            <option value="">— qualsevol —</option>
+            {% for t in tags %}
+            <option value="{{ t.tag_id }}" {% if tag_id == t.tag_id %}selected{% endif %}>{{ t.name }} ({{ t.items_count }})</option>
+            {% endfor %}
+          </select>
+          <p class="form-hint">Els fitxers etiquetats es resolen per contingut (hash), per disc i ruta o per carpeta. Sense cap altre terme es llisten tots els de l'etiqueta.</p>
+        </div>
+        {% endif %}
         <div class="form-group">
           <label class="checkbox-label">
             <input type="checkbox" name="include_missing" value="1" {% if include_missing %}checked{% endif %}>

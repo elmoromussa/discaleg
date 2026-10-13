@@ -83,7 +83,9 @@ def parse_search_params(qp: Mapping[str, Any], getlist=None) -> dict[str, Any]:
     direction = (get("dir_f").strip() or get("dir").strip() or "asc").lower()
     sort_folders = get("sort_folders").strip()
     dir_folders = (get("dir_folders").strip() or "asc").lower()
+    tag_raw = get("tag_id").strip()
     return {
+        "tag_id": int(tag_raw) if tag_raw.isdigit() and int(tag_raw) > 0 else None,
         "q_name": get("q_name").strip(),
         "q_path": get("q_path").strip(),
         "q": get("q").strip(),
@@ -123,7 +125,7 @@ def _file_terms(p: dict[str, Any]) -> tuple[list[str], list[str], list[str], boo
 def has_search_criteria(p: dict[str, Any]) -> bool:
     """True si la cerca té prou criteris per executar-se (termes vàlids o un àmbit de carpeta)."""
     name_terms, path_terms, flex_terms, _ = _file_terms(p)
-    return bool(name_terms or path_terms or flex_terms or p["in_drive"])
+    return bool(name_terms or path_terms or flex_terms or p["in_drive"] or p.get("tag_id"))
 
 
 def run_file_search(
@@ -154,6 +156,7 @@ def run_file_search(
         include_missing=p["include_missing"],
         in_drive=p["in_drive"] or None,
         in_path=p["in_path"] or None,
+        tag_id=p.get("tag_id"),
     )
 
 

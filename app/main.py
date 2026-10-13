@@ -218,6 +218,76 @@ def api_spaces_contents(
     return spaces.api_contents(conn, space_id, limit, offset, sort, dir)
 
 
+@app.post("/api/spaces/{space_id}/items")
+async def api_spaces_add_items(space_id: int, request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Afegeix elements {items: [{kind: file|folder, drive_id, path}]} a una col·lecció."""
+    from app.routes import spaces
+    return await spaces.api_add_items(request, conn, space_id)
+
+
+@app.delete("/api/spaces/{space_id}/items/{item_id}")
+def api_spaces_remove_item(space_id: int, item_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    """Treu un element d'una col·lecció (l'element i les seves etiquetes es conserven)."""
+    from app.routes import spaces
+    return spaces.api_remove_item(conn, space_id, item_id)
+
+
+@app.get("/api/tags")
+def api_tags_list(conn: sqlite3.Connection = Depends(get_db)):
+    from app.routes import spaces
+    return spaces.api_tags(conn)
+
+
+@app.post("/api/tags")
+async def api_tags_create(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Crea una etiqueta {name, color?} (si ja existeix amb aquest nom, la retorna)."""
+    from app.routes import spaces
+    return await spaces.api_tag_create(request, conn)
+
+
+@app.patch("/api/tags/{tag_id}")
+async def api_tags_update(tag_id: int, request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    from app.routes import spaces
+    return await spaces.api_tag_update(request, conn, tag_id)
+
+
+@app.delete("/api/tags/{tag_id}")
+def api_tags_delete(tag_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    from app.routes import spaces
+    return spaces.api_tag_delete(conn, tag_id)
+
+
+@app.get("/api/tags/{tag_id}/contents")
+def api_tags_contents(
+    tag_id: int, conn: sqlite3.Connection = Depends(get_db),
+    limit: int = 300, offset: int = 0, sort: str = "", dir: str = "",
+):
+    """Fitxers amb una etiqueta (resolts per hash, ruta o carpeta), paginats."""
+    from app.routes import spaces
+    return spaces.api_tag_contents(conn, tag_id, limit, offset, sort, dir)
+
+
+@app.post("/api/items/tag")
+async def api_items_tag(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Etiqueta elements: {items: [...], tag_ids: [...]}."""
+    from app.routes import spaces
+    return await spaces.api_items_tag(request, conn, remove=False)
+
+
+@app.post("/api/items/untag")
+async def api_items_untag(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Treu etiquetes d'elements: {items: [...], tag_ids: [...]}."""
+    from app.routes import spaces
+    return await spaces.api_items_tag(request, conn, remove=True)
+
+
+@app.get("/api/items/tags")
+def api_item_tags(kind: str = "file", drive_id: str = "", path: str = "", conn: sqlite3.Connection = Depends(get_db)):
+    """Etiquetes d'un element concret (per marcar les caselles del diàleg «Afegeix a…»)."""
+    from app.routes import spaces
+    return spaces.api_item_tags(conn, kind, drive_id, unquote(path or ""))
+
+
 @app.post("/spaces/desa", name="spaces_save")
 async def spaces_save(request: Request, conn: sqlite3.Connection = Depends(get_db)):
     """Desa la cerca actual de Cercar com a espai (o actualitza'n un) i obre l'explorador."""

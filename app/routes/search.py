@@ -126,6 +126,7 @@ def search_page(
     if not default_space_name and scoped:
         default_space_name = p["in_drive"] + (" › " + p["in_path"].replace("/", " › ") if p["in_path"] else "")
     query_json = json.dumps(p, ensure_ascii=False)
+    tags = queries_spaces.list_tags(conn)
 
     return templates.TemplateResponse(request, "search.html",
         {
@@ -173,5 +174,7 @@ def search_page(
             "editing_space": editing_space,
             "default_space_name": default_space_name,
             "query_json": query_json,
+            "tags": tags,
+            "tag_id": p["tag_id"],
         },
     )

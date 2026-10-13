@@ -25,7 +25,9 @@
     contents: '/api/explorer/contents',
     totals: '/api/explorer/folder-totals',
     spacesTree: '/api/spaces/tree',
-    spaces: '/api/spaces'
+    spaces: '/api/spaces',
+    tags: '/api/tags',
+    items: '/api/items'
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -67,7 +69,15 @@
     statusPages: $('explorer-status-pages'),
     loadMore: $('explorer-load-more'),
     toast: $('explorer-toast'),
-    menu: $('explorer-menu')
+    menu: $('explorer-menu'),
+    dialog: $('explorer-add-dialog'),
+    dialogForm: $('explorer-add-form'),
+    dialogSub: $('explorer-add-sub'),
+    dialogSpaces: $('explorer-add-spaces'),
+    dialogTags: $('explorer-add-tags'),
+    dialogNewSpace: $('explorer-add-new-space'),
+    dialogNewTag: $('explorer-add-new-tag'),
+    dialogCancel: $('explorer-add-cancel')
   };
 
   var searchUrl = root.getAttribute('data-search-url') || '/search';
@@ -75,7 +85,7 @@
   var exportUrl = root.getAttribute('data-export-url') || '/api/explorer/export.csv';
 
   var state = {
-    mode: 'folder',        // 'folder' | 'space'
+    mode: 'folder',        // 'folder' | 'space' | 'tag'
     drives: {},            // drive_id -> fitxa
     drive: null,
     path: '',
@@ -83,6 +93,9 @@
     spaceAncestors: [],
     spacesById: {},        // space_id -> espai (de l'arbre)
     spacesTree: [],
+    tags: [],              // etiquetes (de /api/tags)
+    tag: null,             // etiqueta oberta (mode tag)
+    anchorRow: null,       // fila d'ancoratge per a Maj+clic
     rows: [],              // elements carregats
     totals: null,          // resposta de /folder-totals per a la carpeta actual
     sort: { key: 'name', dir: 'asc' },
@@ -98,6 +111,8 @@
 
   var nodes = {};          // clau drive\0path -> node de l'arbre de discs
   var spaceNodes = {};     // space_id -> node de l'arbre d'espais
+  var tagNodes = {};       // tag_id -> node de l'arbre d'espais (sota «Etiquetes»)
+  var tagsRootNode = null;
 
   // ------------------------------------------------------------------ utilitats
 
@@ -314,6 +329,75 @@
     return node;
   }
 
+  function tagDot(tag) {
+    var dot = el('span', 'tag-dot');
+    dot.style.background = tag.color || 'transparent';
+    return dot;
+  }
+
+  /** Node arrel «Etiquetes» i un node per etiqueta (sense fills). */
+  function makeTagsRootNode(tags) {
+    var node = { kind: 'tags-root', level: 1, hasChildren: tags.length > 0, loaded: true, loading: null,
+      li: null, row: null, toggle: null, iconEl: null, group: null };
+    var li = el('li', 'tree-item tree-tags-root');
+    li.setAttribute('role', 'treeitem');
+    li.setAttribute('aria-level', '1');
+    li.setAttribute('aria-selected', 'false');
+    li.setAttribute('tabindex', '-1');
+    var row = el('div', 'tree-row');
+    var toggle = el('span', 'tree-toggle');
+    toggle.appendChild(icon('i-chevron', 'tree-chevron'));
+    var iconEl = el('span', 'tree-icon');
+    iconEl.appendChild(icon('i-tag'));
+    row.appendChild(toggle);
+    row.appendChild(iconEl);
+    row.appendChild(el('span', 'tree-label', 'Etiquetes'));
+    row.appendChild(el('span', 'tree-meta', tags.length ? String(tags.length) : ''));
+    row.title = tags.length ? plural(tags.length, 'etiqueta', 'etiquetes') : 'Cap etiqueta encara: creeu-ne des de «Afegeix a…»';
+    li.appendChild(row);
+    node.li = li; node.row = row; node.toggle = toggle; node.iconEl = iconEl;
+    li._node = node;
+    setHasChildren(node, node.hasChildren);
+    if (tags.length) {
+      var group = el('ul', 'tree-group');
+      group.setAttribute('role', 'group');
+      group.hidden = true;
+      tags.forEach(function (t) { group.appendChild(makeTagNode(t).li); });
+      node.group = group;
+      li.appendChild(group);
+    }
+    wireNodeEvents(node);
+    return node;
+  }
+
+  function makeTagNode(tag) {
+    var node = { kind: 'tag', tag: tag, level: 2, hasChildren: false, loaded: true, loading: null,
+      li: null, row: null, toggle: null, iconEl: null, group: null };
+    var li = el('li', 'tree-item tree-tag');
+    li.setAttribute('role', 'treeitem');
+    li.setAttribute('aria-level', '2');
+    li.setAttribute('aria-selected', 'false');
+    li.setAttribute('tabindex', '-1');
+    li.dataset.tag = String(tag.tag_id);
+    var row = el('div', 'tree-row');
+    var toggle = el('span', 'tree-toggle');
+    toggle.appendChild(icon('i-chevron', 'tree-chevron'));
+    var iconEl = el('span', 'tree-icon');
+    iconEl.appendChild(tagDot(tag));
+    row.appendChild(toggle);
+    row.appendChild(iconEl);
+    row.appendChild(el('span', 'tree-label', tag.name));
+    row.appendChild(el('span', 'tree-meta', tag.items_count ? String(tag.items_count) : ''));
+    row.title = tag.name + ' · ' + plural(tag.items_count || 0, 'element', 'elements');
+    li.appendChild(row);
+    node.li = li; node.row = row; node.toggle = toggle; node.iconEl = iconEl;
+    li._node = node;
+    setHasChildren(node, false);
+    tagNodes[tag.tag_id] = node;
+    wireNodeEvents(node);
+    return node;
+  }
+
   function wireNodeEvents(node) {
     node.toggle.addEventListener('click', function (e) {
       e.stopPropagation();
@@ -328,6 +412,8 @@
   /** Obrir el que representa un node (carpeta o espai) i desplegar-lo. */
   function activateNode(node) {
     if (node.kind === 'space') openSpace(node.space.space_id, { source: 'tree' });
+    else if (node.kind === 'tag') openTag(node.tag.tag_id, { source: 'tree' });
+    else if (node.kind === 'tags-root') { toggleNode(node); return; }
     else navigate(node.drive, node.path, { source: 'tree' });
     if (node.hasChildren) toggleNode(node, true);
   }
@@ -533,22 +619,37 @@
     Object.keys(spaceNodes).forEach(function (id) {
       if (spaceNodes[id].li.getAttribute('aria-expanded') === 'true') expanded[id] = true;
     });
+    var tagsOpen = tagsRootNode && tagsRootNode.li.getAttribute('aria-expanded') === 'true';
     spaceNodes = {};
+    tagNodes = {};
     els.spaces.textContent = '';
     var frag = document.createDocumentFragment();
     state.spacesTree.forEach(function (s) { frag.appendChild(makeSpaceNode(s, 1).li); });
+    tagsRootNode = makeTagsRootNode(state.tags);
+    frag.appendChild(tagsRootNode.li);
     els.spaces.appendChild(frag);
     Object.keys(expanded).forEach(function (id) { if (spaceNodes[id]) setExpanded(spaceNodes[id], true); });
-    var any = state.spacesTree.length > 0;
-    els.spaces.hidden = !any;
+    if (tagsOpen && tagsRootNode.hasChildren) setExpanded(tagsRootNode, true);
+    var any = state.spacesTree.length > 0 || state.tags.length > 0;
+    els.spaces.hidden = false;
     els.spacesEmpty.hidden = any;
-    if (any && !els.spaces.querySelector('[tabindex="0"]')) els.spaces.firstElementChild.setAttribute('tabindex', '0');
+    if (!els.spaces.querySelector('[tabindex="0"]')) els.spaces.firstElementChild.setAttribute('tabindex', '0');
     if (state.mode === 'space' && state.space && spaceNodes[state.space.space_id]) revealSpace(state.space.space_id);
+    if (state.mode === 'tag' && state.tag && tagNodes[state.tag.tag_id]) revealTag(state.tag.tag_id);
+  }
+
+  function revealTag(tagId) {
+    var node = tagNodes[tagId];
+    if (!node) return;
+    setExpanded(tagsRootNode, true);
+    selectTreeNode(node);
   }
 
   function loadSpacesTree() {
-    return fetchJson(API.spacesTree).then(function (data) {
-      indexSpaces(data.spaces || []);
+    return Promise.all([fetchJson(API.spacesTree), fetchJson(API.tags)]).then(function (res) {
+      indexSpaces(res[0].spaces || []);
+      state.tags = res[1].tags || [];
+      if (state.tag) state.tag = state.tags.filter(function (t) { return t.tag_id === state.tag.tag_id; })[0] || state.tag;
       renderSpacesTree();
     }).catch(function (err) {
       els.spacesEmpty.hidden = false;
@@ -600,6 +701,15 @@
     return location.pathname + '?' + qs({ space: spaceId });
   }
 
+  function buildTagUrl(tagId) {
+    return location.pathname + '?' + qs({ tag: tagId });
+  }
+
+  /** True si el que es mostra és una col·lecció manual o una etiqueta (llista resolta amb motiu). */
+  function isCollectionView() {
+    return state.mode === 'tag' || (state.mode === 'space' && state.space && state.space.kind === 'manual');
+  }
+
   function pushHistory(stateObj, url, opts) {
     if (opts.push !== false) {
       state.histIdx += 1;
@@ -620,17 +730,50 @@
       els.actions.hidden = true;
       els.copy.hidden = true;
       els.spaceActions.hidden = false;
+      els.spaceMove.hidden = false;
       els.spaceEdit.hidden = state.space.kind !== 'smart';
       els.spaceEdit.href = state.space.kind === 'smart'
         ? searchUrl + '?' + qs(queryToParams(state.space.query || {})) + '&space=' + state.space.space_id
         : '#';
+      els.spaceRename.title = 'Reanomena l’espai';
+      els.spaceDelete.title = 'Elimina l’espai';
+    } else if (state.mode === 'tag') {
+      els.up.disabled = true;
+      els.actions.hidden = true;
+      els.copy.hidden = true;
+      els.spaceActions.hidden = false;
+      els.spaceEdit.hidden = false;
+      els.spaceEdit.href = searchUrl + '?' + qs({ tag_id: state.tag.tag_id, submitted: 1 });
+      els.spaceEdit.title = 'Cerca dins d’aquesta etiqueta (pàgina Cercar)';
+      els.spaceMove.hidden = true;
+      els.spaceRename.title = 'Reanomena l’etiqueta';
+      els.spaceDelete.title = 'Elimina l’etiqueta (els fitxers no es toquen)';
     } else {
       els.up.disabled = state.drive == null || !state.path;
       els.actions.hidden = state.drive == null;
       els.spaceActions.hidden = true;
     }
-    root.classList.toggle('mode-space', state.mode === 'space');
+    root.classList.toggle('mode-space', state.mode !== 'folder');
+    root.classList.toggle('mode-collection', !!isCollectionView());
     closeMenu();
+  }
+
+  function openTag(tagId, opts) {
+    opts = opts || {};
+    var tag = state.tags.filter(function (t) { return t.tag_id === Number(tagId); })[0];
+    if (!tag) { toast('Aquesta etiqueta ja no existeix.'); return; }
+    var same = state.mode === 'tag' && state.tag && state.tag.tag_id === tag.tag_id;
+    state.mode = 'tag';
+    state.tag = tag;
+    state.space = null;
+    state.drive = null;
+    state.path = '';
+    if (!same) pushHistory({ tag: tag.tag_id }, buildTagUrl(tag.tag_id), opts);
+    document.title = tag.name + ' — Etiquetes — Explorador — DiscScope';
+    updateNavButtons();
+    renderAddress();
+    loadSpaceContents();
+    revealTag(tag.tag_id);
   }
 
   function navigate(drive, path, opts) {
@@ -639,6 +782,7 @@
     var same = state.mode === 'folder' && state.drive === drive && state.path === path;
     state.mode = 'folder';
     state.space = null;
+    state.tag = null;
     state.drive = drive;
     state.path = path;
     if (!same) pushHistory({ drive: drive, path: path }, buildUrl(drive, path), opts);
@@ -658,6 +802,7 @@
     var same = state.mode === 'space' && state.space && state.space.space_id === spaceId;
     state.mode = 'space';
     state.space = space;
+    state.tag = null;
     state.spaceAncestors = space.ancestors || [];
     state.drive = null;
     state.path = '';
@@ -674,6 +819,7 @@
     if (!st) return;
     state.histIdx = st.idx || 0;
     if (st.space) openSpace(st.space, { push: false });
+    else if (st.tag) openTag(st.tag, { push: false });
     else if (st.drive) navigate(st.drive, st.path || '', { push: false });
   });
 
@@ -706,6 +852,19 @@
 
   function renderAddress() {
     els.address.textContent = '';
+    if (state.mode === 'tag') {
+      var tHead = el('span', 'explorer-address-item explorer-address-root');
+      tHead.appendChild(icon('i-tag'));
+      tHead.appendChild(el('span', null, 'Etiquetes'));
+      els.address.appendChild(tHead);
+      els.address.appendChild(addressSep());
+      var tItem = el('span', 'explorer-address-item explorer-address-current');
+      tItem.setAttribute('aria-current', 'page');
+      tItem.appendChild(tagDot(state.tag));
+      tItem.appendChild(el('span', null, state.tag.name));
+      els.address.appendChild(tItem);
+      return;
+    }
     if (state.mode === 'space') {
       var head = el('span', 'explorer-address-item explorer-address-root');
       head.appendChild(icon('i-space'));
@@ -814,8 +973,42 @@
     items.push({ label: 'Exporta a CSV (amb subcarpetes)', icon: 'i-download', download: true,
       href: exportUrl + '?' + qs({ drive_id: drive, path: path, recursive: 1 }) });
     items.push({ sep: true });
+    items.push({ label: 'Afegeix a una col·lecció o etiqueta…', icon: 'i-plus',
+      action: function () { openAddDialog([{ kind: 'folder', drive: drive, path: path, name: opts && opts.name ? opts.name : (baseName(path) || drive) }]); } });
+    items.push({ sep: true });
     items.push({ label: 'Copia la ruta', icon: 'i-copy', action: function () { copyText(nativePathOf(path, drive)); } });
     return items;
+  }
+
+  /** Objectius del diàleg «Afegeix a…» per a una fila: la selecció si la fila en forma part, si no la fila. */
+  function targetsFor(r) {
+    var selected = state.rows.filter(function (x) { return x.selected && x.kind !== 'space'; });
+    var list = (r.selected && selected.length > 1) ? selected : [r];
+    return list.map(function (x) {
+      return x.kind === 'folder'
+        ? { kind: 'folder', drive: x.drive, path: x.path, name: x.name }
+        : { kind: 'file', drive: x.drive, path: joinPath(x.folder, x.name), name: x.name };
+    });
+  }
+
+  /** Accions per treure un fitxer resolt de la col·lecció o etiqueta oberta. */
+  function removalItems(r) {
+    if (!isCollectionView() || !r.itemId) return [];
+    var what = r.itemKind === 'folder' ? 'la carpeta «' + baseName(r.itemPath) + '»' : (r.reason === 'hash' ? 'aquest fitxer (totes les còpies)' : 'aquest fitxer');
+    if (state.mode === 'tag') {
+      var tag = state.tag;
+      return [{ label: 'Treu l’etiqueta «' + tag.name + '» de ' + what, icon: 'i-minus-circle', action: function () {
+        fetchJson(API.items + '/untag', { method: 'POST', body: { tag_ids: [tag.tag_id], items: [{ kind: r.itemKind, drive_id: r.itemDrive, path: r.itemPath }] } })
+          .then(function () { toast('Etiqueta treta.'); return afterItemsChange(); })
+          .catch(function (err) { toast('No s’ha pogut treure: ' + err.message); });
+      } }];
+    }
+    var space = state.space;
+    return [{ label: 'Treu ' + what + ' de la col·lecció', icon: 'i-minus-circle', action: function () {
+      fetchJson(API.spaces + '/' + space.space_id + '/items/' + r.itemId, { method: 'DELETE' })
+        .then(function () { toast('Element tret de la col·lecció.'); return afterItemsChange(); })
+        .catch(function (err) { toast('No s’ha pogut treure: ' + err.message); });
+    } }];
   }
 
   /** Accions d'un fitxer del llistat. */
@@ -827,7 +1020,7 @@
       dupHref = duplicatesUrl + '?' + qs({ group: 'name-size', name: r.name, size: r.size == null ? '' : r.size });
     }
     var items = [];
-    if (state.mode === 'space') {
+    if (state.mode !== 'folder') {
       items.push({ label: 'Obre la carpeta (' + r.drive + ')', icon: 'i-folder-open',
         action: function () { navigate(r.drive, r.folder); } });
       items.push({ sep: true });
@@ -837,9 +1030,149 @@
     items.push({ label: r.hash ? 'Còpies d’aquest fitxer (mateix contingut)' : 'Còpies d’aquest fitxer (nom i mida)',
       icon: 'i-duplicates', href: dupHref });
     items.push({ sep: true });
+    var targets = targetsFor(r);
+    items.push({ label: targets.length > 1 ? 'Afegeix els ' + targets.length + ' seleccionats a…' : 'Afegeix a una col·lecció o etiqueta…',
+      icon: 'i-plus', action: function () { openAddDialog(targets); } });
+    removalItems(r).forEach(function (it) { items.push(it); });
+    items.push({ sep: true });
     items.push({ label: 'Copia la ruta', icon: 'i-copy',
       action: function () { copyText(nativePathOf(joinPath(r.folder, r.name), r.drive)); } });
     return items;
+  }
+
+  // ------------------------------------------------------------------ diàleg «Afegeix a…»
+
+  var dialogState = { targets: [], initialTags: {} };
+
+  function manualSpacesFlat() {
+    var out = [];
+    (function walk(list, depth) {
+      list.forEach(function (s) {
+        if (s.kind === 'manual') out.push({ space: s, depth: depth });
+        walk(s.children || [], depth + 1);
+      });
+    })(state.spacesTree, 0);
+    return out;
+  }
+
+  function openAddDialog(targets) {
+    if (!targets.length) return;
+    dialogState.targets = targets;
+    dialogState.initialTags = {};
+    els.dialogSub.textContent = targets.length === 1
+      ? (targets[0].kind === 'folder' ? 'Carpeta ' : 'Fitxer ') + targets[0].drive + ' › ' + (targets[0].path.split('/').join(' › ') || '(arrel)')
+      : plural(targets.length, 'element seleccionat', 'elements seleccionats') + ' (' + targets.filter(function (t) { return t.kind === 'folder'; }).length + ' carpetes)';
+    // col·leccions (ràdio)
+    els.dialogSpaces.textContent = '';
+    var none = el('label');
+    var noneInput = el('input'); noneInput.type = 'radio'; noneInput.name = 'add-space'; noneInput.value = ''; noneInput.checked = true;
+    none.appendChild(noneInput);
+    none.appendChild(el('span', 'muted', '— cap col·lecció —'));
+    els.dialogSpaces.appendChild(none);
+    var spaces = manualSpacesFlat();
+    spaces.forEach(function (o) {
+      var lab = el('label');
+      lab.style.paddingLeft = (8 + 16 * o.depth) + 'px';
+      var inp = el('input'); inp.type = 'radio'; inp.name = 'add-space'; inp.value = String(o.space.space_id);
+      if (state.mode === 'space' && state.space && state.space.space_id === o.space.space_id) inp.checked = true;
+      lab.appendChild(inp);
+      lab.appendChild(icon('i-space'));
+      lab.appendChild(el('span', null, o.space.name));
+      els.dialogSpaces.appendChild(lab);
+    });
+    if (!spaces.length) els.dialogSpaces.appendChild(el('div', 'explorer-dialog-empty', 'Encara no hi ha cap col·lecció: escriviu un nom a sota per crear-ne una.'));
+    // etiquetes (caselles)
+    els.dialogTags.textContent = '';
+    state.tags.forEach(function (t) {
+      var lab = el('label');
+      var inp = el('input'); inp.type = 'checkbox'; inp.name = 'add-tag'; inp.value = String(t.tag_id);
+      if (state.mode === 'tag' && state.tag && state.tag.tag_id === t.tag_id) inp.checked = true;
+      lab.appendChild(inp);
+      lab.appendChild(tagDot(t));
+      lab.appendChild(el('span', null, t.name));
+      lab.appendChild(el('span', 'muted', ' · ' + fmtInt(t.items_count || 0)));
+      els.dialogTags.appendChild(lab);
+    });
+    if (!state.tags.length) els.dialogTags.appendChild(el('div', 'explorer-dialog-empty', 'Encara no hi ha cap etiqueta: escriviu un nom a sota per crear-ne una.'));
+    els.dialogNewSpace.value = '';
+    els.dialogNewTag.value = '';
+    if (typeof els.dialog.showModal === 'function') els.dialog.showModal(); else els.dialog.setAttribute('open', '');
+    // amb un sol element, marquem les etiquetes que ja té
+    if (targets.length === 1) {
+      var t0 = targets[0];
+      fetchJson(API.items + '/tags?' + qs({ kind: t0.kind, drive_id: t0.drive, path: t0.path })).then(function (data) {
+        (data.tag_ids || []).forEach(function (id) {
+          dialogState.initialTags[id] = true;
+          var inp = els.dialogTags.querySelector('input[value="' + id + '"]');
+          if (inp) inp.checked = true;
+        });
+      }).catch(function () { /* opcional */ });
+    }
+  }
+
+  function closeAddDialog() {
+    if (typeof els.dialog.close === 'function' && els.dialog.open) els.dialog.close();
+    else els.dialog.removeAttribute('open');
+  }
+
+  els.dialogCancel.addEventListener('click', closeAddDialog);
+
+  els.dialogForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var targets = dialogState.targets;
+    var items = targets.map(function (t) { return { kind: t.kind, drive_id: t.drive, path: t.path }; });
+    var spaceChoice = els.dialogSpaces.querySelector('input[name="add-space"]:checked');
+    var spaceId = spaceChoice && spaceChoice.value ? Number(spaceChoice.value) : null;
+    var newSpace = els.dialogNewSpace.value.trim();
+    var newTag = els.dialogNewTag.value.trim();
+    var checked = {};
+    Array.prototype.forEach.call(els.dialogTags.querySelectorAll('input[name="add-tag"]'), function (inp) { checked[inp.value] = inp.checked; });
+    var tagOn = Object.keys(checked).filter(function (id) { return checked[id] && !dialogState.initialTags[id]; }).map(Number);
+    var tagOff = Object.keys(checked).filter(function (id) { return !checked[id] && dialogState.initialTags[id]; }).map(Number);
+    var summary = [];
+    var chain = Promise.resolve();
+    if (newSpace) {
+      chain = chain.then(function () {
+        return fetchJson(API.spaces, { method: 'POST', body: { name: newSpace, kind: 'manual', parent_id: spaceId } })
+          .then(function (data) { spaceId = data.space.space_id; summary.push('col·lecció «' + data.space.name + '» creada'); });
+      });
+    }
+    chain = chain.then(function () {
+      if (spaceId == null) return;
+      return fetchJson(API.spaces + '/' + spaceId + '/items', { method: 'POST', body: { items: items } }).then(function (res) {
+        summary.push(plural(res.added, 'element afegit', 'elements afegits') + (res.already ? ' (' + res.already + ' ja hi eren)' : ''));
+        (res.errors || []).forEach(function (m) { summary.push('⚠ ' + m); });
+      });
+    });
+    if (newTag) {
+      chain = chain.then(function () {
+        return fetchJson(API.tags, { method: 'POST', body: { name: newTag } }).then(function (data) { tagOn.push(data.tag.tag_id); summary.push('etiqueta «' + data.tag.name + '»'); });
+      });
+    }
+    chain = chain.then(function () {
+      if (!tagOn.length) return;
+      return fetchJson(API.items + '/tag', { method: 'POST', body: { items: items, tag_ids: tagOn } }).then(function () {
+        summary.push(plural(tagOn.length, 'etiqueta aplicada', 'etiquetes aplicades'));
+      });
+    }).then(function () {
+      if (!tagOff.length) return;
+      return fetchJson(API.items + '/untag', { method: 'POST', body: { items: items, tag_ids: tagOff } }).then(function () {
+        summary.push(plural(tagOff.length, 'etiqueta treta', 'etiquetes tretes'));
+      });
+    });
+    chain.then(function () {
+      closeAddDialog();
+      toast(summary.length ? summary.join(' · ') : 'Res a fer: trieu una col·lecció o una etiqueta.');
+      return afterItemsChange();
+    }).catch(function (err) { toast('No s’ha pogut afegir: ' + err.message); });
+  });
+
+  /** Després d'un canvi d'elements: refresca l'arbre (recomptes) i la llista si és una col·lecció o etiqueta. */
+  function afterItemsChange() {
+    return loadSpacesTree().then(function () {
+      if (isCollectionView()) loadSpaceContents();
+      else if (state.mode === 'space' && state.space) updateNavButtons();
+    });
   }
 
   var menuState = { open: false, returnFocus: null, anchorBtn: null, openedAt: 0 };
@@ -952,7 +1285,9 @@
   els.actions.addEventListener('click', function () {
     if (menuState.open && menuState.anchorBtn === els.actions) { closeMenu(); return; }
     if (state.drive == null) return;
-    openMenu(folderMenuItems(state.drive, state.path), { el: els.actions }, nativePath(), els.actions);
+    var items = folderMenuItems(state.drive, state.path, { name: baseName(state.path) || state.drive });
+    if (!state.path) items = items.filter(function (it) { return !/Afegeix/.test(it.label || ''); });  // l'arrel no entra sencera
+    openMenu(items, { el: els.actions }, nativePath(), els.actions);
   });
 
   function openRowMenu(tr, anchor) {
@@ -988,6 +1323,69 @@
     if (tr && tr._row && !e.target.closest('a, button')) focusRow(tr);
   });
 
+  // ------------------------------------------------------------------ selecció múltiple
+
+  function setRowSelected(r, on) {
+    r.selected = !!on;
+    var tr = rowElement(r);
+    if (tr) tr.classList.toggle('row-selected', r.selected);
+  }
+
+  function rowElement(r) {
+    var trs = els.tbody.querySelectorAll('tr');
+    for (var i = 0; i < trs.length; i++) if (trs[i]._row === r) return trs[i];
+    return null;
+  }
+
+  function clearSelection() {
+    var any = false;
+    state.rows.forEach(function (r) { if (r.selected) { any = true; setRowSelected(r, false); } });
+    state.anchorRow = null;
+    if (any) renderStatus();
+  }
+
+  function selectedCount() { return state.rows.filter(function (r) { return r.selected; }).length; }
+
+  function selectRange(from, to) {
+    var order = visibleRows();
+    var a = order.indexOf(from), b = order.indexOf(to);
+    if (a < 0 || b < 0) return;
+    var lo = Math.min(a, b), hi = Math.max(a, b);
+    order.forEach(function (r, i) { setRowSelected(r, i >= lo && i <= hi); });
+  }
+
+  els.tbody.addEventListener('click', function (e) {
+    var tr = e.target.closest('tr');
+    if (!tr || !tr._row || e.target.closest('a, button')) return;
+    var r = tr._row;
+    if (r.kind === 'space') return;
+    if (e.shiftKey && state.anchorRow) {
+      selectRange(state.anchorRow, r);
+    } else if (e.ctrlKey || e.metaKey) {
+      setRowSelected(r, !r.selected);
+      state.anchorRow = r;
+    } else {
+      var only = r.selected && selectedCount() === 1;
+      state.rows.forEach(function (x) { if (x.selected && x !== r) setRowSelected(x, false); });
+      setRowSelected(r, !only);
+      state.anchorRow = r.selected ? r : null;
+    }
+    if (e.shiftKey) window.getSelection && window.getSelection().removeAllRanges();
+    renderStatus();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var inField = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+    if (inField || menuState.open || (els.dialog && els.dialog.open)) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A') && els.list.contains(document.activeElement)) {
+      e.preventDefault();
+      visibleRows().forEach(function (r) { if (r.kind !== 'space') setRowSelected(r, true); });
+      renderStatus();
+    } else if (e.key === 'Escape' && selectedCount()) {
+      clearSelection();
+    }
+  });
+
   function openRow(r) {
     if (r.kind === 'folder') navigate(r.drive, r.path);
     else if (r.kind === 'space') openSpace(r.space.space_id);
@@ -1004,6 +1402,9 @@
       case 'Home': focusRow(rows[0]); break;
       case 'End': focusRow(rows[rows.length - 1]); break;
       case 'Enter': openRow(tr._row); break;
+      case ' ':
+        if (tr._row.kind !== 'space') { setRowSelected(tr._row, !tr._row.selected); state.anchorRow = tr._row; renderStatus(); }
+        break;
       case 'F10':
         if (!e.shiftKey) return;
         openRowMenu(tr, { el: tr.querySelector('.row-menu-btn') || tr });
@@ -1045,6 +1446,7 @@
 
   function resetList() {
     state.rows = [];
+    state.anchorRow = null;
     state.totals = null;
     state.offset = 0;
     state.filter = '';
@@ -1093,11 +1495,13 @@
   }
 
   function spaceContentsUrl(offset) {
-    return API.spaces + '/' + state.space.space_id + '/contents?' + qs({
-      limit: PAGE_SIZE, offset: offset, sort: state.sort.key, dir: state.sort.dir
-    });
+    var base = state.mode === 'tag'
+      ? API.tags + '/' + state.tag.tag_id + '/contents?'
+      : API.spaces + '/' + state.space.space_id + '/contents?';
+    return base + qs({ limit: PAGE_SIZE, offset: offset, sort: state.sort.key, dir: state.sort.dir });
   }
 
+  /** Carrega el contingut de l'espai o etiqueta oberts (mode space / tag). */
   function loadSpaceContents() {
     var reqId = ++state.reqId;
     var space = state.space;
@@ -1107,8 +1511,9 @@
     fetchJson(spaceContentsUrl(0))
       .then(function (data) {
         if (reqId !== state.reqId) return;
-        state.rows = spaceChildRows(space).concat(toSpaceRows(data));
+        state.rows = (space ? spaceChildRows(space) : []).concat(toSpaceRows(data));
         state.totalFiles = data.total || 0;
+        state.members = data.members;
         state.directBytes = 0;
         state.hasMore = !!data.has_more;
         renderRows();
@@ -1136,7 +1541,9 @@
         kind: 'file', name: f.name, path: '', ext: cleanExt(f.extension),
         size: f.size_bytes == null ? null : Number(f.size_bytes), items: null,
         date: f.modified_utc || '', hasTotals: true, hash: f.hash_sha256 || '',
-        drive: f.drive_id, folder: f.folder || '', missing: !!f.missing_since_utc
+        drive: f.drive_id, folder: f.folder || '', missing: !!f.missing_since_utc,
+        reason: f.reason || '', itemId: f.item_id || null, itemKind: f.item_kind || '',
+        itemDrive: f.item_drive || '', itemPath: f.item_path || ''
       };
     });
   }
@@ -1213,6 +1620,7 @@
     rows.forEach(function (r, i) {
       var tr = r.kind === 'folder' ? folderRow(r) : r.kind === 'space' ? spaceRow(r) : fileRow(r);
       tr._row = r;
+      if (r.selected) tr.classList.add('row-selected');
       tr.setAttribute('tabindex', i === 0 ? '0' : '-1');
       tr.querySelector('.col-name').appendChild(rowMenuButton(tr));
       frag.appendChild(tr);
@@ -1225,14 +1633,34 @@
 
   function renderEmptySpace() {
     var s = state.space;
-    if (s.kind === 'smart') {
+    if (state.mode === 'tag') {
+      els.emptySpaceText.textContent = 'Cap fitxer té l’etiqueta «' + state.tag.name + '».';
+      els.emptySpaceHint.textContent = 'Seleccioneu fitxers o carpetes a qualsevol disc i trieu «Afegeix a…» al menú contextual per etiquetar-los.';
+    } else if (s.kind === 'smart') {
       els.emptySpaceText.textContent = 'Cap fitxer coincideix amb aquesta cerca desada.';
       els.emptySpaceHint.textContent = 'Criteris: ' + describeQuery(s.query) + '. Podeu editar-los amb el botó de la barra d’eines.';
+    } else if (state.members) {
+      els.emptySpaceText.textContent = 'Els ' + plural(state.members, 'element', 'elements') + ' d’aquesta col·lecció no corresponen a cap fitxer present.';
+      els.emptySpaceHint.textContent = 'Potser els fitxers han desaparegut en l’últim escaneig o les carpetes ja no existeixen.';
     } else {
-      els.emptySpaceText.textContent = 'Aquest espai és buit.';
-      els.emptySpaceHint.textContent = 'Deseu-hi cerques des de Cercar (triant-lo com a «Dins de») o creeu-hi espais amb el botó + del panell.';
+      els.emptySpaceText.textContent = 'Aquesta col·lecció és buida.';
+      els.emptySpaceHint.textContent = 'Seleccioneu fitxers o carpetes a qualsevol disc i trieu «Afegeix a…» al menú contextual; també hi podeu desar cerques des de Cercar o crear-hi espais amb el botó +.';
     }
     setListView('emptyspace');
+  }
+
+  function reasonCell(r) {
+    var td = el('td', 'col-reason');
+    if (!r.reason) return td;
+    var badge = el('span', 'reason-badge reason-' + r.reason);
+    var text, title;
+    if (r.reason === 'hash') { text = 'mateix contingut'; title = 'Còpia per contingut (hash SHA-256) de l’element afegit'; badge.appendChild(icon('i-duplicates')); }
+    else if (r.reason === 'folder') { text = 'dins de ' + baseName(r.itemPath); title = 'Dins de la carpeta afegida ' + r.itemDrive + ' › ' + r.itemPath.split('/').join(' › '); badge.appendChild(icon('i-folder')); }
+    else { text = 'per disc i ruta'; title = 'Referència directa (encara sense hash)'; badge.appendChild(icon('i-file')); }
+    badge.appendChild(el('span', null, text));
+    badge.title = title;
+    td.appendChild(badge);
+    return td;
   }
 
   function driveCell(r) {
@@ -1288,6 +1716,7 @@
     tr.appendChild(tdName);
     tr.appendChild(driveCell(r));
     tr.appendChild(folderCell(r));
+    tr.appendChild(el('td', 'col-reason', ''));
     tr.appendChild(el('td', 'col-type', 'Carpeta'));
     var tdItems = el('td', 'col-items num');
     if (r.hasTotals) {
@@ -1325,7 +1754,8 @@
     tr.appendChild(tdName);
     tr.appendChild(el('td', 'col-drive', ''));
     tr.appendChild(el('td', 'col-folder', ''));
-    tr.appendChild(el('td', 'col-type', r.space.kind === 'smart' ? 'Cerca desada' : 'Espai'));
+    tr.appendChild(el('td', 'col-reason', ''));
+    tr.appendChild(el('td', 'col-type', r.space.kind === 'smart' ? 'Cerca desada' : 'Col·lecció'));
     tr.appendChild(el('td', 'col-items num', ''));
     tr.appendChild(el('td', 'col-size num', ''));
     tr.appendChild(el('td', 'col-date', fmtDate(r.space.updated_utc || r.space.created_utc)));
@@ -1344,6 +1774,7 @@
     tr.appendChild(tdName);
     tr.appendChild(driveCell(r));
     tr.appendChild(folderCell(r));
+    tr.appendChild(reasonCell(r));
     tr.appendChild(el('td', 'col-type', r.ext ? r.ext.toUpperCase() : '—'));
     tr.appendChild(el('td', 'col-items num', ''));
     tr.appendChild(el('td', 'col-size num', r.size == null ? '' : fmtBytes(r.size)));
@@ -1351,20 +1782,40 @@
     return tr;
   }
 
+  function selectionStatus() {
+    var n = selectedCount();
+    return n ? plural(n, 'seleccionat', 'seleccionats') : '';
+  }
+
+  function setStatusText(parts) {
+    els.status.textContent = '';
+    els.status.appendChild(document.createTextNode(parts.join('  │  ')));
+    var sel = selectionStatus();
+    if (sel) {
+      els.status.appendChild(document.createTextNode(parts.length ? '  │  ' : ''));
+      els.status.appendChild(el('span', 'explorer-selection', sel));
+    }
+  }
+
   function renderStatus() {
-    if (state.mode === 'space') {
+    if (state.mode === 'space' || state.mode === 'tag') {
       var sp = state.space;
       var loaded = state.rows.filter(function (r) { return r.kind === 'file'; }).length;
       var sParts = [];
       var sf = state.filter.trim();
       if (sf) {
         sParts.push(fmtInt(visibleRows().length) + ' de ' + plural(state.rows.length, 'element carregat', 'elements carregats') + ' coincideixen amb «' + sf + '»');
+      } else if (state.mode === 'tag') {
+        sParts.push(plural(state.totalFiles, 'fitxer amb l’etiqueta', 'fitxers amb l’etiqueta') + ' «' + state.tag.name + '»');
       } else if (sp.kind === 'smart') {
         sParts.push(plural(state.totalFiles, 'fitxer coincideix', 'fitxers coincideixen') + ' · ' + describeQuery(sp.query));
       } else {
-        sParts.push(plural((sp.children || []).length, 'espai', 'espais'));
+        var bits = [];
+        if ((sp.children || []).length) bits.push(plural(sp.children.length, 'espai', 'espais'));
+        bits.push(plural(state.totalFiles, 'fitxer', 'fitxers') + (state.members ? ' de ' + plural(state.members, 'element afegit', 'elements afegits') : ''));
+        sParts.push(bits.join(' · '));
       }
-      els.status.textContent = sParts.join('  │  ');
+      setStatusText(sParts);
       els.statusPages.textContent = state.totalFiles > loaded ? 'Mostrant ' + fmtInt(loaded) + ' de ' + fmtInt(state.totalFiles) + ' fitxers' : '';
       els.loadMore.hidden = !state.hasMore;
       return;
@@ -1385,7 +1836,7 @@
         parts.push('Amb subcarpetes: ' + plural(s.files, 'fitxer', 'fitxers') + ' · ' + fmtBytes(s.bytes));
       }
     }
-    els.status.textContent = parts.join('  │  ');
+    setStatusText(parts);
     if (state.totalFiles > loadedFiles) {
       els.statusPages.textContent = 'Mostrant ' + fmtInt(loadedFiles) + ' de ' + fmtInt(state.totalFiles) + ' fitxers';
     } else {
@@ -1483,6 +1934,15 @@
   });
 
   els.spaceRename.addEventListener('click', function () {
+    if (state.mode === 'tag' && state.tag) {
+      var tname = window.prompt('Nou nom de l’etiqueta:', state.tag.name);
+      if (tname == null || !tname.trim() || tname.trim() === state.tag.name) return;
+      var tid = state.tag.tag_id;
+      fetchJson(API.tags + '/' + tid, { method: 'PATCH', body: { name: tname.trim() } })
+        .then(function () { toast('Etiqueta reanomenada.'); return loadSpacesTree().then(function () { openTag(tid, { push: false }); }); })
+        .catch(function (err) { toast('No s’ha pogut reanomenar: ' + err.message); });
+      return;
+    }
     if (!state.space) return;
     var name = window.prompt('Nou nom de l’espai:', state.space.name);
     if (name == null || !name.trim() || name.trim() === state.space.name) return;
@@ -1512,6 +1972,14 @@
   });
 
   els.spaceDelete.addEventListener('click', function () {
+    if (state.mode === 'tag' && state.tag) {
+      var tg = state.tag;
+      if (!window.confirm('Eliminar l’etiqueta «' + tg.name + '»? Es treu de ' + plural(tg.items_count || 0, 'element', 'elements') + '; els fitxers dels discs no es toquen.')) return;
+      fetchJson(API.tags + '/' + tg.tag_id, { method: 'DELETE' })
+        .then(function () { toast('Etiqueta eliminada.'); state.tag = null; return loadSpacesTree().then(function () { location.href = location.pathname; }); })
+        .catch(function (err) { toast('No s’ha pogut eliminar: ' + err.message); });
+      return;
+    }
     if (!state.space) return;
     var s = state.space;
     var n = (s.children || []).length;
@@ -1602,13 +2070,20 @@
     Promise.all([rootsReady, loadSpacesTree()]).then(function () {
       var params = new URLSearchParams(location.search);
       var spaceParam = params.get('space');
+      var tagParam = params.get('tag');
       var drive = params.get('drive');
       var path = (params.get('path') || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      var tagKnown = tagParam && state.tags.some(function (t) { return String(t.tag_id) === tagParam; });
       if (spaceParam && state.spacesById[spaceParam]) {
         history.replaceState({ space: Number(spaceParam), idx: 0 }, '', buildSpaceUrl(spaceParam));
         openSpace(Number(spaceParam), { push: false });
       } else if (spaceParam) {
         toast('L’espai «' + spaceParam + '» no existeix.');
+      } else if (tagKnown) {
+        history.replaceState({ tag: Number(tagParam), idx: 0 }, '', buildTagUrl(tagParam));
+        openTag(Number(tagParam), { push: false });
+      } else if (tagParam) {
+        toast('L’etiqueta «' + tagParam + '» no existeix.');
       } else if (drive && state.drives[drive]) {
         history.replaceState({ drive: drive, path: path, idx: 0 }, '', buildUrl(drive, path));
         navigate(drive, path, { push: false });
