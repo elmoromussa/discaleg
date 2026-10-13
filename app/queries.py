@@ -73,7 +73,7 @@ def get_recent_scans(conn: sqlite3.Connection, limit: int = 10) -> list[dict[str
     """Últims escaneigs registrats (taula scans)."""
     cur = conn.execute("""
         SELECT scan_id, drive_id, root_path, mode, started_utc, finished_utc, status,
-               files_count, total_bytes, files_new, files_changed, files_missing
+               files_count, total_bytes, files_new, files_changed, files_missing, errors_count
         FROM scans ORDER BY scan_id DESC LIMIT ?
     """, (limit,))
     return [dict(row) for row in cur.fetchall()]
@@ -85,10 +85,52 @@ def get_drive_scans(conn: sqlite3.Connection, drive_id: str) -> list[dict[str, A
         """
         SELECT scan_id, drive_id, root_path, mode, started_utc, finished_utc, status,
                files_count, total_bytes, files_new, files_changed, files_missing,
-               tool_version, notes
+               tool_version, notes, errors_count, serial_number, model, interface,
+               free_bytes, health_status
         FROM scans WHERE drive_id = ? ORDER BY started_utc DESC, scan_id DESC
         """,
         (drive_id,),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+def get_read_error_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Errors de lectura registrats per disc (escaneig i hash), per a les fitxes de Discs."""
+    return {r[0]: int(r[1]) for r in conn.execute(
+        "SELECT drive_id, COUNT(*) FROM read_errors GROUP BY drive_id")}
+
+
+def _read_errors_where(drive_id: str, phase: str | None, scan_id: int | None) -> tuple[str, list]:
+    where = ["drive_id = ?"]
+    params: list[Any] = [drive_id]
+    if phase:
+        where.append("phase = ?"); params.append(phase)
+    if scan_id is not None:
+        where.append("scan_id = ?"); params.append(scan_id)
+    return " AND ".join(where), params
+
+
+def get_read_error_phase_counts(
+    conn: sqlite3.Connection, drive_id: str, scan_id: int | None = None
+) -> dict[str, int]:
+    """Errors d'un disc per fase (opcionalment només els d'un escaneig)."""
+    where, params = _read_errors_where(drive_id, None, scan_id)
+    return {r[0]: int(r[1]) for r in conn.execute(
+        f"SELECT phase, COUNT(*) FROM read_errors WHERE {where} GROUP BY phase", params)}
+
+
+def get_read_errors(
+    conn: sqlite3.Connection, drive_id: str, phase: str | None, scan_id: int | None,
+    limit: int, offset: int,
+) -> list[dict[str, Any]]:
+    """Pàgina d'errors de lectura d'un disc en ordre de ruta (índex (drive_id, relative_path))."""
+    where, params = _read_errors_where(drive_id, phase, scan_id)
+    cur = conn.execute(
+        f"""
+        SELECT id, scan_id, phase, relative_path, error_code, message, created_utc
+        FROM read_errors WHERE {where} ORDER BY relative_path, id LIMIT ? OFFSET ?
+        """,
+        params + [limit, offset],
     )
     return [dict(row) for row in cur.fetchall()]
 

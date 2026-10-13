@@ -35,6 +35,7 @@ def discs_page_get(
     """Pàgina Discs: llista de discs (si hi ha DB) i formulari d'escaneig."""
     drives: list[dict] = []
     scans: list[dict] = []
+    error_counts: dict[str, int] = {}
     if database_path.is_file():
         try:
             conn = sqlite3.connect(str(database_path), timeout=10.0)
@@ -48,6 +49,7 @@ def discs_page_get(
                 else:
                     drives = queries.get_drives_summary(conn)
                     scans = queries.get_recent_scans(conn, limit=10)
+                    error_counts = queries.get_read_error_counts(conn)
             finally:
                 conn.close()
         except Exception as e:
@@ -58,6 +60,7 @@ def discs_page_get(
             "request": request,
             "drives": drives,
             "scans": scans,
+            "error_counts": error_counts,
             "drive_kinds": schema.DRIVE_KINDS,
             "msg_ok": msg_ok,
             "msg_error": msg_error,
@@ -150,6 +153,82 @@ def scan_changes_page(
             "next_url": next_url,
             "tab_urls": {k: tab_url(k) for k in queries.SCAN_CHANGE_KINDS},
             "per_page": CHANGES_PER_PAGE,
+        },
+    )
+
+
+ERRORS_PER_PAGE = 100
+
+
+def read_errors_page(
+    request: Request,
+    templates: Jinja2Templates,
+    conn: sqlite3.Connection,
+    drive_id: str,
+) -> HTMLResponse:
+    """Carpetes i fitxers que l'escaneig o el hash no han pogut llegir, per disc.
+
+    Filtres: ?scan= (un escaneig; sense valor, tots, inclosos els errors del hash, que no
+    tenen escaneig), ?fase= (scandir, entry, hash_stat, hash_read), ?page=.
+    """
+    drive = queries.get_drive(conn, drive_id)
+    if drive is None:
+        raise HTTPException(status_code=404, detail=f"El disc «{drive_id}» no és a la base de dades.")
+    scans = queries.get_drive_scans(conn, drive_id)
+    scan_raw = request.query_params.get("scan", "").strip()
+    scan_id = int(scan_raw) if scan_raw.isdigit() else None
+    scan = next((s for s in scans if s["scan_id"] == scan_id), None) if scan_id is not None else None
+    if scan_id is not None and scan is None:
+        scan_id = None
+    phase = request.query_params.get("fase", "").strip().lower()
+    if phase not in schema.READ_ERROR_PHASES:
+        phase = ""
+    page = max(1, int(request.query_params.get("page", 1) or 1))
+
+    counts = queries.get_read_error_phase_counts(conn, drive_id, scan_id)
+    total = counts.get(phase, 0) if phase else sum(counts.values())
+    total_pages = max(1, -(-total // ERRORS_PER_PAGE)) if total else 0
+    page = min(page, total_pages) if total_pages else 1
+    rows = queries.get_read_errors(
+        conn, drive_id, phase or None, scan_id, ERRORS_PER_PAGE, (page - 1) * ERRORS_PER_PAGE
+    )
+    for r in rows:
+        if r["phase"] == "scandir":  # la ruta és una carpeta
+            r["folder"] = r["relative_path"].replace("\\", "/")
+            r["name"] = ""
+        else:
+            r["folder"] = _parent_folder(r["relative_path"])
+            r["name"] = r["relative_path"].rsplit("\\", 1)[-1]
+
+    base_params = {"scan": str(scan_id) if scan_id is not None else "", "fase": phase}
+    prev_url = next_url = None
+    if page > 1:
+        prev_url = str(request.url.include_query_params(**base_params, page=page - 1))
+    if page < total_pages:
+        next_url = str(request.url.include_query_params(**base_params, page=page + 1))
+
+    def tab_url(kind: str) -> str:
+        return str(request.url.include_query_params(
+            scan=base_params["scan"], fase=kind, page=1))
+
+    return templates.TemplateResponse(request, "read_errors.html",
+        {
+            "request": request,
+            "drive": drive,
+            "drive_kinds": schema.DRIVE_KINDS,
+            "scans": scans,
+            "scan": scan,
+            "scan_id": scan_id,
+            "phase": phase,
+            "phase_labels": schema.READ_ERROR_PHASES,
+            "counts": counts,
+            "rows": rows,
+            "total": total,
+            "page": page,
+            "total_pages": total_pages,
+            "prev_url": prev_url,
+            "next_url": next_url,
+            "tab_urls": {k: tab_url(k) for k in ("", *schema.READ_ERROR_PHASES)},
         },
     )
 

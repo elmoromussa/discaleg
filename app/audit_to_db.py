@@ -40,6 +40,7 @@ GUARD_MIN_MATCH = 0.10
 CHUNK_SIZE = 20_000  # files a la taula temporal per executemany
 
 ProgressFn = Callable[[int, str], None]  # (fitxers_llegits, directori_actual)
+ErrorFn = Callable[[str, str, OSError], None]  # (fase, ruta_relativa, error)
 
 
 @dataclass
@@ -55,6 +56,7 @@ class ScanResult:
     files_changed: int
     files_missing: int
     seconds: float
+    errors_count: int = 0
 
     def message(self) -> str:
         n = _fmt_int
@@ -63,7 +65,21 @@ class ScanResult:
         if self.mode == "update":
             base += (f" (nous {n(self.files_new)}, modificats {n(self.files_changed)}, "
                      f"desapareguts {n(self.files_missing)})")
+        if self.errors_count:
+            base += (f". {n(self.errors_count)} carpetes o fitxers no s'han pogut llegir "
+                     f"(vegeu «Errors» a la fitxa del disc)")
         return base
+
+
+def error_code(e: OSError) -> int | None:
+    """Codi de l'error: winerror a Windows (p. ex. 5 = accés denegat), si no errno."""
+    return getattr(e, "winerror", None) or e.errno
+
+
+def error_text(e: OSError) -> str:
+    """Text curt de l'error (sense la ruta, que ja es guarda a part)."""
+    text = e.strerror or str(e) or type(e).__name__
+    return text if len(text) <= 300 else text[:299] + "…"
 
 
 def _fmt_int(n: int) -> str:
@@ -86,12 +102,13 @@ def _extension(name: str) -> str:
     return NO_EXT
 
 
-def _walk(root: str, progress: ProgressFn | None):
+def _walk(root: str, progress: ProgressFn | None, on_error: ErrorFn | None = None):
     """Itera (rel_dir, name, size, mtime) per a tots els fitxers regulars sota root.
 
     Per a cada directori (també els buits) emet abans una entrada amb name=None, perquè
     folder_stats contingui totes les carpetes. Iteratiu (sense recursió), no segueix
-    enllaços simbòlics ni junctions, i continua si un directori no es pot llegir.
+    enllaços simbòlics ni junctions, i continua si un directori o una entrada no es pot
+    llegir: ho comunica a on_error (fase 'scandir' o 'entry') i segueix.
     """
     sep = os.sep
     stack: list[tuple[str, str]] = [(root, "")]
@@ -100,7 +117,9 @@ def _walk(root: str, progress: ProgressFn | None):
         abs_dir, rel_dir = stack.pop()
         try:
             it = os.scandir(abs_dir)
-        except OSError:
+        except OSError as e:
+            if on_error:
+                on_error("scandir", rel_dir, e)
             continue
         yield rel_dir, None, 0, 0.0
         with it:
@@ -114,7 +133,9 @@ def _walk(root: str, progress: ProgressFn | None):
                         stack.append((entry.path, (rel_dir + sep + entry.name) if rel_dir else entry.name))
                         continue
                     st = entry.stat(follow_symlinks=False)
-                except OSError:
+                except OSError as e:
+                    if on_error:
+                        on_error("entry", (rel_dir + sep + entry.name) if rel_dir else entry.name, e)
                     continue
                 if not statmod.S_ISREG(st.st_mode):
                     continue
@@ -251,6 +272,7 @@ def scan_drive(
     files_count = 0
     total_bytes = 0
     sep = os.sep
+    errors: list[tuple[str, str, int | None, str]] = []  # (fase, ruta relativa, codi, text)
 
     def flush() -> None:
         if chunk:
@@ -259,8 +281,11 @@ def scan_drive(
             )
             chunk.clear()
 
+    def on_error(phase: str, rel: str, e: OSError) -> None:
+        errors.append((phase, rel, error_code(e), error_text(e)))
+
     try:
-        for rel_dir, name, size, mtime in _walk(root, progress):
+        for rel_dir, name, size, mtime in _walk(root, progress, on_error):
             if name is None:
                 folder_agg[rel_dir]  # registra la carpeta encara que no tingui fitxers
                 continue
@@ -275,6 +300,21 @@ def scan_drive(
                 flush()
         flush()
         conn.commit()  # tanca la transacció implícita de les insercions a la taula temporal
+
+        # --- carpetes i entrades il·legibles: queden lligades a l'escaneig encara que la
+        #     fusió posterior s'aturi (guarda) o falli
+        if errors:
+            conn.executemany(
+                """
+                INSERT INTO read_errors (drive_id, scan_id, phase, relative_path, error_code,
+                                         message, created_utc)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ((drive_id, scan_id, phase, rel, code, text, now)
+                 for phase, rel, code, text in errors),
+            )
+            conn.execute("UPDATE scans SET errors_count = ? WHERE scan_id = ?", (len(errors), scan_id))
+            conn.commit()
 
         # --- guarda: arrel o disc equivocat? (update sense --force)
         if mode == "update" and not force_volume:
@@ -427,10 +467,11 @@ def scan_drive(
         conn.execute(
             """
             UPDATE scans SET finished_utc = ?, status = 'done', files_count = ?, total_bytes = ?,
-                   files_new = ?, files_changed = ?, files_missing = ?
+                   files_new = ?, files_changed = ?, files_missing = ?, errors_count = ?
             WHERE scan_id = ?
             """,
-            (finished, files_count, total_bytes, files_new, files_changed, files_missing, scan_id),
+            (finished, files_count, total_bytes, files_new, files_changed, files_missing,
+             len(errors), scan_id),
         )
         schema.refresh_drive_counters(conn, drive_id, root_path=root, scan_utc=finished)
         conn.execute("COMMIT")
@@ -452,7 +493,7 @@ def scan_drive(
         scan_id=scan_id, drive_id=drive_id, mode=mode, files_count=files_count,
         total_bytes=total_bytes, folders_count=len(folder_agg), extensions_count=len(ext_stats),
         files_new=files_new, files_changed=files_changed, files_missing=files_missing,
-        seconds=time.time() - t0,
+        seconds=time.time() - t0, errors_count=len(errors),
     )
 
 

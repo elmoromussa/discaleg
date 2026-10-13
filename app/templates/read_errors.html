@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Errors de lectura a {{ drive.drive_id }} — Discàleg{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Sou a">
+  <a href="{{ request.url_for('discs_route') }}">Discs</a>
+  <span class="breadcrumbs-sep" aria-hidden="true">›</span>
+  <span aria-current="page">{{ drive.drive_id }}</span>
+</nav>
+<h1>Errors de lectura a {{ drive.drive_id }}{% if drive.label %} <span class="h1-sub">{{ drive.label }}</span>{% endif %}</h1>
+<p class="page-description">
+  Carpetes i fitxers que l'escaneig no ha pogut llistar (permisos, disc amb errors, rutes estranyes) o que el càlcul del hash no ha pogut obrir. No són a l'inventari, o hi són sense hash.
+  {% if drive.kind or drive.location %}<span class="muted">{{ drive_kinds.get(drive.kind, drive.kind) if drive.kind else '' }}{% if drive.kind and drive.location %} · {% endif %}{% if drive.location %}a {{ drive.location }}{% endif %}</span>{% endif %}
+</p>
+
+<form method="get" class="changes-scan-form" action="{{ request.url_for('read_errors_route', drive_id=drive.drive_id) }}">
+  <label for="scan">Escaneig</label>
+  <select name="scan" id="scan" onchange="this.form.submit()">
+    <option value="" {% if scan_id is none %}selected{% endif %}>Tots (escaneigs i hash)</option>
+    {% for s in scans %}
+    <option value="{{ s.scan_id }}" {% if s.scan_id == scan_id %}selected{% endif %}>
+      #{{ s.scan_id }} · {{ (s.started_utc or '')[:16].replace('T', ' ') }} · {{ 'actualització' if s.mode == 'update' else 'complet' }} · {{ s.status }}{% if s.errors_count %} · {{ s.errors_count }} errors{% endif %}
+    </option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="fase" value="{{ phase }}">
+  <noscript><button type="submit" class="btn btn-secondary btn-sm">Mostra</button></noscript>
+</form>
+
+{% if scan %}
+<div class="changes-scan-meta">
+  <span>Arrel <span class="mono">{{ scan.root_path }}</span></span>
+  <span>Inici {{ (scan.started_utc or '')[:19].replace('T', ' ') }}</span>
+  {% if scan.finished_utc %}<span>Fi {{ (scan.finished_utc or '')[:19].replace('T', ' ') }}</span>{% endif %}
+  {% if scan.model or scan.serial_number %}<span class="mono">{{ [scan.model, scan.interface, scan.serial_number] | select | join(' · ') }}</span>{% endif %}
+</div>
+{% endif %}
+
+<nav class="changes-tabs" aria-label="Fase de l'error">
+  <a href="{{ tab_urls[''] }}" class="changes-tab changes-tab-all{% if not phase %} active{% endif %}" {% if not phase %}aria-current="page"{% endif %}>
+    Tots <span class="changes-count">{{ counts.values() | sum }}</span>
+  </a>
+  {% for kind, label in phase_labels.items() %}
+  <a href="{{ tab_urls[kind] }}" class="changes-tab changes-tab-missing{% if phase == kind %} active{% endif %}" {% if phase == kind %}aria-current="page"{% endif %}>
+    {{ label }} <span class="changes-count">{{ counts.get(kind, 0) }}</span>
+  </a>
+  {% endfor %}
+</nav>
+
+{% if not rows %}
+<div class="empty-state">
+  <p>Cap error de lectura{% if phase %} d'aquest tipus{% endif %}{% if scan %} en aquest escaneig{% endif %}.</p>
+  {% if not scans %}<p class="hint">Aquest disc encara no té cap escaneig registrat.</p>{% endif %}
+</div>
+{% else %}
+<p class="changes-summary"><strong>{{ total }}</strong> errors{% if total_pages > 1 %} · pàgina {{ page }} de {{ total_pages }}{% endif %}</p>
+<div class="table-wrapper">
+  <table class="changes-table">
+    <thead>
+      <tr>
+        <th>Carpeta</th>
+        <th>Fitxer</th>
+        <th>Fase</th>
+        <th class="num">Codi</th>
+        <th>Error</th>
+        <th>Data</th>
+        <th class="num">Escaneig</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="mono changes-folder"><a href="{{ request.url_for('explorador_route') }}?drive={{ drive.drive_id | urlencode }}&amp;path={{ r.folder | urlencode }}" title="Obre la carpeta a l'explorador">{{ r.folder.replace('/', '\\') or '(arrel)' }}</a></td>
+        <td class="mono">{% if r.name %}<a href="{{ request.url_for('search_route') }}?q_name={{ r.name | urlencode }}&amp;submitted=1" title="Cerca aquest nom a tots els discs">{{ r.name }}</a>{% else %}<span class="muted">(carpeta)</span>{% endif %}</td>
+        <td>{{ phase_labels.get(r.phase, r.phase) }}</td>
+        <td class="num">{{ r.error_code if r.error_code is not none else '—' }}</td>
+        <td>{{ r.message or '' }}</td>
+        <td>{{ (r.created_utc or '')[:19].replace('T', ' ') }}</td>
+        <td class="num">{% if r.scan_id %}<a href="{{ request.url_for('scan_changes_route', drive_id=drive.drive_id) }}?scan={{ r.scan_id }}">#{{ r.scan_id }}</a>{% else %}<span class="muted">hash</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "pagination.html" %}
+{% endif %}
+{% endblock %}

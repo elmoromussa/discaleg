@@ -35,6 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import schema  # noqa: E402
+from app.audit_to_db import error_code, error_text  # noqa: E402
 from app.config import database_path  # noqa: E402
 from app.disk_info import get_physical_disk_info, identity_serial  # noqa: E402
 from app.volume_info import get_volume_info  # noqa: E402
@@ -71,22 +72,25 @@ def sha256_file(path: str, size_hint: int) -> str:
 
 
 def _hash_one(root: str, row: tuple) -> tuple:
-    """row = (id, relative_path, size, mtime). Retorna (id, hash|None, size, mtime_iso, error)."""
+    """row = (id, relative_path, size, mtime).
+
+    Retorna (id, relative_path, hash|None, size, mtime_iso, error), on error és None,
+    "missing" (el fitxer ja no hi és) o (fase, codi, text) per a read_errors."""
     fid, rel, size_db, mtime_db = row
     path = os.path.join(root, rel)
     try:
         st = os.stat(path)
     except FileNotFoundError:
-        return fid, None, size_db, mtime_db, "missing"
+        return fid, rel, None, size_db, mtime_db, "missing"
     except OSError as e:
-        return fid, None, size_db, mtime_db, f"stat: {e}"
+        return fid, rel, None, size_db, mtime_db, ("hash_stat", error_code(e), error_text(e))
     size = st.st_size
     mtime = _utc_iso(st.st_mtime)
     try:
         digest = sha256_file(path, size)
     except OSError as e:
-        return fid, None, size, mtime, f"read: {e}"
-    return fid, digest, size, mtime, None
+        return fid, rel, None, size, mtime, ("hash_read", error_code(e), error_text(e))
+    return fid, rel, digest, size, mtime, None
 
 
 def _fmt_bytes(n: float) -> str:
@@ -230,8 +234,9 @@ def main(argv: list[str] | None = None) -> int:
                 now = schema.utc_now_iso()
                 upd: list[tuple] = []
                 miss: list[tuple] = []
+                errs: list[tuple] = []
                 b_files = b_bytes = 0
-                for fid, digest, size, mtime, err in results:
+                for fid, rel, digest, size, mtime, err in results:
                     if digest:
                         upd.append((digest, now, size, mtime, size, mtime, fid))
                         b_files += 1; b_bytes += size
@@ -239,13 +244,22 @@ def main(argv: list[str] | None = None) -> int:
                         miss.append((now, fid)); n_missing += 1
                     else:
                         n_errors += 1
-                        print(f"\n  error {fid}: {err}", file=sys.stderr)
+                        phase, code, text = err
+                        errs.append((drive, rel, phase, code, text, now))
+                        print(f"\n  error {rel}: {text}", file=sys.stderr)
                 conn.execute("BEGIN")
                 conn.executemany(
                     "UPDATE inventory SET hash_sha256 = ?, hashed_utc = ?, hash_size_bytes = ?, "
                     "hash_mtime_utc = ?, size_bytes = ?, modified_utc = ? WHERE id = ?", upd)
                 conn.executemany(
                     "UPDATE inventory SET missing_since_utc = ? WHERE id = ?", miss)
+                # un sol registre per fitxer: el fitxer es reintenta a cada execució
+                conn.executemany(
+                    "DELETE FROM read_errors WHERE drive_id = ? AND relative_path = ? AND scan_id IS NULL",
+                    [(d, r) for d, r, *_ in errs])
+                conn.executemany(
+                    "INSERT INTO read_errors (drive_id, relative_path, phase, error_code, message, "
+                    "created_utc) VALUES (?, ?, ?, ?, ?, ?)", errs)
                 conn.execute(
                     "UPDATE drives SET hashed_files = hashed_files + ?, hashed_bytes = hashed_bytes + ?, "
                     "files_count = files_count - ?, updated_utc = ? WHERE drive_id = ?",
@@ -269,7 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
     el = time.time() - t0
     print(f"\nFet: {done_files:,} fitxers, {_fmt_bytes(done_bytes)} en {_fmt_secs(el)} "
-          f"({done_bytes / el / 1e6 if el else 0:.0f} MB/s). Desapareguts: {n_missing}, errors: {n_errors}.")
+          f"({done_bytes / el / 1e6 if el else 0:.0f} MB/s). Desapareguts: {n_missing}, errors: {n_errors}"
+          + (" (registrats a read_errors: vegeu «Errors» a la fitxa del disc)." if n_errors else "."))
     return 0
 
 

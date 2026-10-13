@@ -402,6 +402,14 @@ def scan_changes_route(
     return discs.scan_changes_page(request, templates, conn, drive_id)
 
 
+@app.get("/discs/{drive_id}/errors", name="read_errors_route")
+def read_errors_route(
+    request: Request, drive_id: str, conn: sqlite3.Connection = Depends(get_db)
+):
+    """Carpetes i fitxers que l'escaneig o el hash no han pogut llegir."""
+    return discs.read_errors_page(request, templates, conn, drive_id)
+
+
 @app.post("/discs/fitxa", name="discs_card")
 async def discs_card(request: Request):
     """Desa la fitxa d'un disc (etiqueta, tipus, ubicació, notes)."""

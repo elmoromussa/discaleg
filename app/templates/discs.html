@@ -83,6 +83,7 @@
         {% if d.model or d.serial_number or d.interface %}<div><dt>Maquinari</dt><dd title="Model · bus · número de sèrie del disc físic"><span class="mono">{{ [d.vendor, d.model, d.interface, d.serial_number] | select | join(' · ') }}</span>{% if d.physical_size_bytes %} <span class="bytes">({{ d.physical_size_bytes | int | format_bytes }})</span>{% endif %}</dd></div>{% endif %}
         {% if d.free_bytes is not none %}<div><dt>Lliure</dt><dd title="Espai lliure del volum a l'últim escaneig"><span class="bytes">{{ d.free_bytes | int | format_bytes }}</span>{% if d.capacity_bytes %} · {{ '%.0f' | format(100.0 * d.free_bytes / d.capacity_bytes) }} %{% endif %}</dd></div>{% endif %}
         {% if d.health_status and d.health_status != 'Healthy' %}<div><dt>Salut</dt><dd><span class="disc-health-warn" title="Estat segons Windows (Get-Disk)">{{ d.health_status }}</span></dd></div>{% endif %}
+        {% if error_counts.get(d.drive_id) %}<div><dt>Errors</dt><dd><a class="disc-health-warn" href="{{ request.url_for('read_errors_route', drive_id=d.drive_id) }}" title="Carpetes i fitxers que no s'han pogut llegir">{{ error_counts[d.drive_id] }} de lectura</a></dd></div>{% endif %}
       </dl>
       <details class="disc-edit">
         <summary class="btn btn-update disc-edit-toggle" aria-label="Edita la fitxa de {{ d.drive_id }}">Edita la fitxa</summary>
@@ -128,7 +129,7 @@
   <div class="table-wrapper">
     <table>
       <thead>
-        <tr><th>#</th><th>Disc</th><th>Arrel</th><th>Mode</th><th>Inici</th><th>Estat</th><th>Fitxers</th><th>Mida</th><th>Nous</th><th>Modificats</th><th>Desapareguts</th></tr>
+        <tr><th>#</th><th>Disc</th><th>Arrel</th><th>Mode</th><th>Inici</th><th>Estat</th><th>Fitxers</th><th>Mida</th><th>Nous</th><th>Modificats</th><th>Desapareguts</th><th>Errors</th></tr>
       </thead>
       <tbody>
         {% for s in scans %}
@@ -145,6 +146,7 @@
           <td>{% if s.files_new is not none %}<a href="{{ changes_url }}&amp;tipus=new">{{ s.files_new }}</a>{% else %}—{% endif %}</td>
           <td>{% if s.files_changed is not none %}<a href="{{ changes_url }}&amp;tipus=changed">{{ s.files_changed }}</a>{% else %}—{% endif %}</td>
           <td>{% if s.files_missing is not none %}<a href="{{ changes_url }}&amp;tipus=missing">{{ s.files_missing }}</a>{% else %}—{% endif %}</td>
+          <td>{% if s.errors_count %}<a class="disc-health-warn" href="{{ request.url_for('read_errors_route', drive_id=s.drive_id) }}?scan={{ s.scan_id }}">{{ s.errors_count }}</a>{% elif s.errors_count is not none %}0{% else %}—{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
