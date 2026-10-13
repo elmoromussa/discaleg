@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import schema  # noqa: E402
 from app.config import database_path  # noqa: E402
+from app.disk_info import get_physical_disk_info, identity_serial  # noqa: E402
 from app.volume_info import get_volume_info  # noqa: E402
 
 BUFFER = 8 * 1024 * 1024  # 8 MiB per lectura
@@ -142,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
 
     drive = args.drive.strip()
     drow = conn.execute(
-        "SELECT last_root_path, volume_serial FROM drives WHERE drive_id = ?", (drive,)
+        "SELECT last_root_path, volume_serial, serial_number FROM drives WHERE drive_id = ?", (drive,)
     ).fetchone()
     if not drow:
         print(f"El disc «{drive}» no és a la DB.", file=sys.stderr)
@@ -157,12 +158,22 @@ def main(argv: list[str] | None = None) -> int:
               f"es va escanejar amb {drow[1]}. Disc equivocat? Usa --force per continuar.",
               file=sys.stderr)
         return 3
-    if not drow[1] and vol["volume_serial"]:
-        conn.execute("UPDATE drives SET volume_serial = ?, label = COALESCE(label, ?), "
-                     "filesystem = COALESCE(filesystem, ?), capacity_bytes = COALESCE(capacity_bytes, ?) "
-                     "WHERE drive_id = ?",
-                     (vol["volume_serial"], vol["label"], vol["filesystem"], vol["capacity_bytes"], drive))
-        conn.commit()
+    hw = get_physical_disk_info(Path(root))
+    hw_serial = identity_serial(hw)  # None si és buida o genèrica (carcasses USB): no bloqueja
+    if drow[2] and hw_serial and drow[2] != hw_serial and not args.force:
+        print(f"ATENCIÓ: el disc físic a {root} té el número de sèrie {hw_serial} "
+              f"({hw['model'] or 'model desconegut'}) però «{drive}» es va escanejar amb {drow[2]}. "
+              f"Disc equivocat? Usa --force per continuar.", file=sys.stderr)
+        return 3
+    # Omple només els camps buits de la fitxa; l'escaneig és qui els manté
+    conn.execute(
+        "UPDATE drives SET volume_serial = COALESCE(volume_serial, ?), label = COALESCE(label, ?), "
+        "filesystem = COALESCE(filesystem, ?), capacity_bytes = COALESCE(capacity_bytes, ?), "
+        "serial_number = COALESCE(serial_number, ?), model = COALESCE(model, ?), "
+        "interface = COALESCE(interface, ?) WHERE drive_id = ?",
+        (vol["volume_serial"], vol["label"], vol["filesystem"], vol["capacity_bytes"],
+         hw_serial, hw["model"], hw["interface"], drive))
+    conn.commit()
 
     where = "drive_id = ? AND hash_sha256 IS NULL AND missing_since_utc IS NULL AND size_bytes >= ?"
     params: list = [drive, args.min_size]

@@ -27,6 +27,7 @@ def get_drives_summary(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Fitxa i comptadors per disc (taula drives; fitxers presents, cobertura de hash, últim escaneig)."""
     cur = conn.execute("""
         SELECT drive_id, label, kind, location, filesystem, volume_serial, capacity_bytes, status, notes,
+               serial_number, model, vendor, interface, free_bytes, physical_size_bytes, health_status,
                files_count AS files, total_bytes, hashed_files, hashed_bytes,
                last_root_path, last_scan_utc, updated_utc,
                CASE WHEN files_count > 0 THEN 100.0 * hashed_files / files_count ELSE 0 END AS hashed_pct

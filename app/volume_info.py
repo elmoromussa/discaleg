@@ -18,11 +18,14 @@ def volume_root(path: Path) -> Path:
 
 
 def get_volume_info(path: Path) -> dict:
-    """Retorna {label, filesystem, volume_serial, capacity_bytes} (valors None si no es pot)."""
-    info: dict = {"label": None, "filesystem": None, "volume_serial": None, "capacity_bytes": None}
+    """Retorna {label, filesystem, volume_serial, capacity_bytes, free_bytes} (None si no es pot)."""
+    info: dict = {"label": None, "filesystem": None, "volume_serial": None,
+                  "capacity_bytes": None, "free_bytes": None}
     root = volume_root(path)
     try:
-        info["capacity_bytes"] = shutil.disk_usage(str(root)).total
+        usage = shutil.disk_usage(str(root))
+        info["capacity_bytes"] = usage.total
+        info["free_bytes"] = usage.free
     except OSError:
         pass
     if os.name == "nt":

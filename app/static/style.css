@@ -439,6 +439,15 @@ h2 {
   color: var(--text-muted);
 }
 
+.disc-health-warn {
+  color: #b71c1c;
+  font-weight: 600;
+}
+
+html.dark .disc-health-warn {
+  color: #ef5350;
+}
+
 /* Formulari desplegable d'edició de la fitxa */
 .disc-edit summary {
   list-style: none;

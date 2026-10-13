@@ -80,6 +80,9 @@
         <div><dt>Hash</dt><dd title="Fitxers amb SHA-256 calculat">{{ '%.1f' | format(d.hashed_pct | default(0)) }} %</dd></div>
         <div><dt>Escaneig</dt><dd title="{{ d.last_root_path or '' }}">{{ (d.last_scan_utc or '—')[:10] }}{% if d.last_root_path %} <span class="mono disc-root">{{ d.last_root_path }}</span>{% endif %}</dd></div>
         {% if d.filesystem or d.volume_serial %}<div><dt>Volum</dt><dd><span class="mono">{{ d.filesystem or '' }}{% if d.filesystem and d.volume_serial %} · {% endif %}{{ d.volume_serial or '' }}</span></dd></div>{% endif %}
+        {% if d.model or d.serial_number or d.interface %}<div><dt>Maquinari</dt><dd title="Model · bus · número de sèrie del disc físic"><span class="mono">{{ [d.vendor, d.model, d.interface, d.serial_number] | select | join(' · ') }}</span>{% if d.physical_size_bytes %} <span class="bytes">({{ d.physical_size_bytes | int | format_bytes }})</span>{% endif %}</dd></div>{% endif %}
+        {% if d.free_bytes is not none %}<div><dt>Lliure</dt><dd title="Espai lliure del volum a l'últim escaneig"><span class="bytes">{{ d.free_bytes | int | format_bytes }}</span>{% if d.capacity_bytes %} · {{ '%.0f' | format(100.0 * d.free_bytes / d.capacity_bytes) }} %{% endif %}</dd></div>{% endif %}
+        {% if d.health_status and d.health_status != 'Healthy' %}<div><dt>Salut</dt><dd><span class="disc-health-warn" title="Estat segons Windows (Get-Disk)">{{ d.health_status }}</span></dd></div>{% endif %}
       </dl>
       <details class="disc-edit">
         <summary class="btn btn-update disc-edit-toggle" aria-label="Edita la fitxa de {{ d.drive_id }}">Edita la fitxa</summary>

@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app import schema
+from app.disk_info import get_physical_disk_info, identity_serial, suggest_kind
 from app.schema import NO_EXT, init_schema, utc_now_iso  # noqa: F401  (re-export)
 from app.volume_info import get_volume_info
 
@@ -158,8 +159,11 @@ def scan_drive(
 
     now = utc_now_iso()
     vol = get_volume_info(Path(root))
+    hw = get_physical_disk_info(Path(root))  # tot None si no es pot (no Windows, UNC, error)
+    hw_serial = identity_serial(hw)  # None si la sèrie és buida o genèrica (carcasses USB)
     prev = conn.execute(
-        "SELECT volume_serial, last_root_path FROM drives WHERE drive_id = ?", (drive_id,)
+        "SELECT volume_serial, last_root_path, serial_number FROM drives WHERE drive_id = ?",
+        (drive_id,),
     ).fetchone()
     if (prev and prev[0] and vol["volume_serial"] and prev[0] != vol["volume_serial"]
             and not force_volume):
@@ -169,21 +173,48 @@ def scan_drive(
             f"reformatat o un disc nou amb aquest identificador, marca «Reiniciar el disc» "
             f"(o --force al CLI)."
         )
+    if prev and prev[2] and hw_serial and prev[2] != hw_serial and not force_volume:
+        raise RuntimeError(
+            f"El disc físic muntat a {root} té el número de sèrie {hw_serial} "
+            f"({hw['model'] or 'model desconegut'}), però «{drive_id}» es va escanejar amb el "
+            f"número de sèrie {prev[2]} (arrel {prev[1]}). Si realment és un disc nou amb aquest "
+            f"identificador, marca «Reiniciar el disc» (o --force al CLI)."
+        )
 
     # --- drives + scans (commit immediat: si l'escaneig peta, queda 'running' per detectar-ho)
     conn.execute(
         "INSERT OR IGNORE INTO drives (drive_id, created_utc) VALUES (?, ?)", (drive_id, now)
     )
+    # Identitat: amb force/replace el maquinari detectat substitueix el registrat (disc nou);
+    # si no, només s'omplen els camps buits. Espai lliure i salut es refresquen sempre.
+    override = force_volume or mode == "replace"
     conn.execute(
         """
         UPDATE drives SET label = COALESCE(label, ?), filesystem = COALESCE(?, filesystem),
                volume_serial = CASE WHEN ? THEN COALESCE(?, volume_serial)
                                     ELSE COALESCE(volume_serial, ?) END,
-               capacity_bytes = COALESCE(?, capacity_bytes), updated_utc = ?
+               serial_number = CASE WHEN ? THEN COALESCE(?, serial_number)
+                                    ELSE COALESCE(serial_number, ?) END,
+               model = CASE WHEN ? THEN COALESCE(?, model) ELSE COALESCE(model, ?) END,
+               vendor = CASE WHEN ? THEN COALESCE(?, vendor) ELSE COALESCE(vendor, ?) END,
+               interface = CASE WHEN ? THEN COALESCE(?, interface) ELSE COALESCE(interface, ?) END,
+               kind = COALESCE(kind, ?),
+               capacity_bytes = COALESCE(?, capacity_bytes),
+               physical_size_bytes = COALESCE(?, physical_size_bytes),
+               free_bytes = COALESCE(?, free_bytes),
+               health_status = COALESCE(?, health_status),
+               updated_utc = ?
         WHERE drive_id = ?
         """,
-        (vol["label"], vol["filesystem"], force_volume or mode == "replace", vol["volume_serial"],
-         vol["volume_serial"], vol["capacity_bytes"], now, drive_id),
+        (vol["label"], vol["filesystem"],
+         override, vol["volume_serial"], vol["volume_serial"],
+         override, hw_serial, hw_serial,
+         override, hw["model"], hw["model"],
+         override, hw["vendor"], hw["vendor"],
+         override, hw["interface"], hw["interface"],
+         suggest_kind(hw),
+         vol["capacity_bytes"], hw["physical_size_bytes"], vol["free_bytes"], hw["health_status"],
+         now, drive_id),
     )
     # escaneigs anteriors d'aquest disc que van quedar «running» (procés tallat): tancar-los
     conn.execute(
@@ -193,10 +224,12 @@ def scan_drive(
     )
     cur = conn.execute(
         """
-        INSERT INTO scans (drive_id, root_path, mode, started_utc, status, tool_version, notes)
-        VALUES (?, ?, ?, ?, 'running', ?, ?)
+        INSERT INTO scans (drive_id, root_path, mode, started_utc, status, tool_version, notes,
+                           serial_number, model, interface, free_bytes, health_status)
+        VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
         """,
-        (drive_id, root, mode, now, TOOL_VERSION, notes),
+        (drive_id, root, mode, now, TOOL_VERSION, notes,
+         hw["serial_number"], hw["model"], hw["interface"], vol["free_bytes"], hw["health_status"]),
     )
     scan_id = int(cur.lastrowid)
     conn.commit()
