@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Canvis a {{ drive.drive_id }} — DiscScope{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Sou a">
+  <a href="{{ request.url_for('discs_route') }}">Discs</a>
+  <span class="breadcrumbs-sep" aria-hidden="true">›</span>
+  <span aria-current="page">{{ drive.drive_id }}</span>
+</nav>
+<h1>Què ha canviat a {{ drive.drive_id }}{% if drive.label %} <span class="h1-sub">{{ drive.label }}</span>{% endif %}</h1>
+<p class="page-description">
+  Fitxers nous, modificats i desapareguts que ha detectat cada escaneig en mode actualització, comparant el disc amb el que ja hi havia a la base de dades.
+  {% if drive.kind or drive.location %}<span class="muted">{{ drive_kinds.get(drive.kind, drive.kind) if drive.kind else '' }}{% if drive.kind and drive.location %} · {% endif %}{% if drive.location %}a {{ drive.location }}{% endif %}</span>{% endif %}
+</p>
+
+{% if not scans %}
+<div class="empty-state"><p>Aquest disc encara no té cap escaneig registrat.</p></div>
+{% else %}
+<form method="get" class="changes-scan-form" action="{{ request.url_for('scan_changes_route', drive_id=drive.drive_id) }}">
+  <label for="scan">Escaneig</label>
+  <select name="scan" id="scan" onchange="this.form.submit()">
+    {% for s in scans %}
+    <option value="{{ s.scan_id }}" {% if scan and s.scan_id == scan.scan_id %}selected{% endif %}>
+      #{{ s.scan_id }} · {{ (s.started_utc or '')[:16].replace('T', ' ') }} · {{ 'actualització' if s.mode == 'update' else 'complet' }}{% if s.tool_version == 'legacy-csv-import' %} (importació CSV){% endif %} · {{ s.status }}{% if s.files_count is not none %} · {{ s.files_count }} fitxers{% endif %}
+    </option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="tipus" value="{{ change }}">
+  <noscript><button type="submit" class="btn btn-secondary btn-sm">Mostra</button></noscript>
+</form>
+
+{% if scan %}
+<div class="changes-scan-meta">
+  <span>Arrel <span class="mono">{{ scan.root_path }}</span></span>
+  <span>Inici {{ (scan.started_utc or '')[:19].replace('T', ' ') }}</span>
+  {% if scan.finished_utc %}<span>Fi {{ (scan.finished_utc or '')[:19].replace('T', ' ') }}</span>{% endif %}
+  {% if scan.total_bytes %}<span>{{ scan.total_bytes | format_bytes }}</span>{% endif %}
+  {% if scan.notes %}<span class="muted">{{ scan.notes }}</span>{% endif %}
+</div>
+
+<nav class="changes-tabs" aria-label="Tipus de canvi">
+  {% for kind in ('new', 'changed', 'missing') %}
+  <a href="{{ tab_urls[kind] }}" class="changes-tab changes-tab-{{ kind }}{% if change == kind %} active{% endif %}" {% if change == kind %}aria-current="page"{% endif %}>
+    {{ change_labels[kind] }} <span class="changes-count">{{ counts[kind] }}</span>
+  </a>
+  {% endfor %}
+</nav>
+
+{% if not has_detail %}
+<div class="empty-state">
+  {% if scan.mode != 'update' or scan.tool_version == 'legacy-csv-import' %}
+  <p>Escaneig complet{% if scan.tool_version == 'legacy-csv-import' %} (importació dels CSV originals){% endif %}: tots els fitxers eren nous i no hi ha detall per fitxer.</p>
+  <p class="hint">Els canvis apareixeran a partir del proper escaneig d'aquest disc en mode actualització.</p>
+  {% elif scan.status != 'done' %}
+  <p>Aquest escaneig no va acabar ({{ scan.status }}): no hi ha canvis registrats.</p>
+  {% else %}
+  <p>Cap canvi: el disc era idèntic a l'inventari.</p>
+  {% endif %}
+</div>
+{% elif not rows %}
+<div class="empty-state"><p>Cap fitxer {{ change_labels[change] | lower }} en aquest escaneig.</p></div>
+{% else %}
+<p class="changes-summary"><strong>{{ total }}</strong> {{ change_labels[change] | lower }}{% if total_pages > 1 %} · pàgina {{ page }} de {{ total_pages }}{% endif %}</p>
+<div class="table-wrapper">
+  <table class="changes-table">
+    <thead>
+      <tr>
+        <th>Carpeta</th>
+        <th>Fitxer</th>
+        {% if change == 'changed' %}
+        <th class="num">Mida abans</th><th class="num">Mida després</th><th>Data abans</th><th>Data després</th>
+        {% elif change == 'new' %}
+        <th class="num">Mida</th><th>Modificat</th>
+        {% else %}
+        <th class="num">Mida</th><th>Darrera data</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="mono changes-folder"><a href="{{ request.url_for('explorador_route') }}?drive={{ drive.drive_id | urlencode }}&amp;path={{ r.folder | urlencode }}" title="Obre la carpeta a l'explorador">{{ r.folder.replace('/', '\\') or '(arrel)' }}</a></td>
+        <td class="mono"><a href="{{ request.url_for('search_route') }}?q_name={{ r.name | urlencode }}&amp;submitted=1" title="Cerca aquest nom a tots els discs">{{ r.name }}</a></td>
+        {% if change == 'changed' %}
+        <td class="bytes num">{{ r.old_size | format_bytes }}</td>
+        <td class="bytes num{% if r.old_size != r.new_size %} changed-cell{% endif %}">{{ r.new_size | format_bytes }}</td>
+        <td>{{ (r.old_mtime or '')[:19].replace('T', ' ') }}</td>
+        <td class="{% if (r.old_mtime or '')[:19] != (r.new_mtime or '')[:19] %}changed-cell{% endif %}">{{ (r.new_mtime or '')[:19].replace('T', ' ') }}</td>
+        {% elif change == 'new' %}
+        <td class="bytes num">{{ r.new_size | format_bytes }}</td>
+        <td>{{ (r.new_mtime or '')[:19].replace('T', ' ') }}</td>
+        {% else %}
+        <td class="bytes num">{{ r.old_size | format_bytes }}</td>
+        <td>{{ (r.old_mtime or '')[:19].replace('T', ' ') }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "pagination.html" %}
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -108,6 +108,7 @@
         </form>
       </details>
       <div class="stat-disc-actions">
+        <a class="btn btn-update" href="{{ request.url_for('scan_changes_route', drive_id=d.drive_id) }}" aria-label="Canvis entre escaneigs de {{ d.drive_id }}">Canvis</a>
         <button type="button" class="btn btn-update" data-drive-id="{{ d.drive_id }}" aria-label="Actualitzar unitat {{ d.drive_id }}">Actualitzar</button>
         <form method="post" action="{{ request.url_for('discs_delete') }}" class="stat-disc-delete-form" onsubmit="return confirm('Eliminar la unitat de la base de dades? Aquesta acció no es pot desfer.');">
           <input type="hidden" name="drive_id" value="{{ d.drive_id }}">
@@ -137,9 +138,10 @@
           <td>{{ s.status }}</td>
           <td>{{ s.files_count | default(0, true) | int }}</td>
           <td class="bytes">{{ s.total_bytes | default(0, true) | int | format_bytes }}</td>
-          <td>{{ s.files_new if s.files_new is not none else '—' }}</td>
-          <td>{{ s.files_changed if s.files_changed is not none else '—' }}</td>
-          <td>{{ s.files_missing if s.files_missing is not none else '—' }}</td>
+          {% set changes_url = request.url_for('scan_changes_route', drive_id=s.drive_id) ~ '?scan=' ~ s.scan_id %}
+          <td>{% if s.files_new is not none %}<a href="{{ changes_url }}&amp;tipus=new">{{ s.files_new }}</a>{% else %}—{% endif %}</td>
+          <td>{% if s.files_changed is not none %}<a href="{{ changes_url }}&amp;tipus=changed">{{ s.files_changed }}</a>{% else %}—{% endif %}</td>
+          <td>{% if s.files_missing is not none %}<a href="{{ changes_url }}&amp;tipus=missing">{{ s.files_missing }}</a>{% else %}—{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>

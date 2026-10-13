@@ -11,6 +11,7 @@ layout: default
 |-------|-----------|
 | **drives** | Una fitxa per disc (*drive_id*): etiqueta, tipus, model, serial del volum, capacitat, estat, notes, i comptadors (fitxers, bytes, fitxers amb hash, últim escaneig i arrel). |
 | **scans** | Un registre per cada escaneig: disc, arrel, mode, inici/fi, estat (`running`, `done`, `aborted`), fitxers nous/modificats/desapareguts. |
+| **scan_changes** | El detall per fitxer de cada escaneig en mode actualització: ruta, tipus de canvi (`new`, `changed`, `missing`) i mida i data abans i després. És el que mostra la vista «Canvis» de cada disc. |
 | **inventory** | Un fitxer per fila. A més de ruta, nom, extensió, mida i data: `hash_sha256`, `hashed_utc`, mida i data en el moment del hash, `first_seen_scan`, `last_seen_scan` i `missing_since_utc`. Índex únic per (`drive_id`, `relative_path`). |
 | **folder_stats**, **by_extension** | Agregats per carpeta (ruta relativa a l'arrel escanejada; totes les carpetes, amb recomptes de fitxers directes) i per extensió. Es recalculen a cada escaneig. |
 

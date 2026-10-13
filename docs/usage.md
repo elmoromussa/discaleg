@@ -31,6 +31,10 @@ Si marques **Reiniciar el disc**, l'inventari d'aquest *drive_id* s'esborra i es
 
 A cada targeta de **Discs**, **Edita la fitxa** desplega un formulari per indicar l'**etiqueta** (nom amb sentit per a tu), el **tipus** de suport (disc dur, SSD, NVMe, memòria USB, targeta SD, òptic, xarxa, altre), la **ubicació** física (on és guardat) i **notes** lliures. Aquestes dades es mostren a la targeta i al rètol del disc a l'Explorador. L'escaneig no les toca: només omple l'etiqueta amb la del volum si encara és buida.
 
+### Què ha canviat entre escaneigs
+
+A cada targeta de **Discs**, **Canvis** obre la vista dels escaneigs del disc: per a cada escaneig en mode actualització hi ha tres pestanyes amb els fitxers **nous**, **modificats** (mida i data abans i després, amb el que ha canviat ressaltat) i **desapareguts**, paginats i ordenats per ruta. La carpeta de cada fitxer enllaça a l'Explorador i el nom a la cerca. Els comptadors de la taula «Últims escaneigs» també hi porten. Els escaneigs complets (reinici del disc o importació dels CSV originals) no tenen detall per fitxer: tot era nou.
+
 ### Hashes i verificació
 
 El càlcul del SHA-256 per fitxer es fa amb `python tools/hash_files.py` (vegeu [Escaneig, actualització i hash](escaneig_i_hash.html)). És incremental: es pot aturar i reprendre, i la pàgina **Discs** mostra el percentatge de fitxers amb hash per disc.
@@ -45,7 +49,7 @@ El càlcul del SHA-256 per fitxer es fa amb `python tools/hash_files.py` (vegeu 
 | **Extensions** | Estadístiques per extensió (paginat). |
 | **Carpetes** | Llistat de carpetes per mida (paginat). |
 | **Explorador** | Arbre de carpetes i fitxers des de la DB (sense accés al sistema de fitxers). |
-| **Discs** | Auditar i incorporar o actualitzar discs; fitxa de cada disc (etiqueta, tipus, ubicació, notes). |
+| **Discs** | Auditar i incorporar o actualitzar discs; fitxa de cada disc (etiqueta, tipus, ubicació, notes); vista «Canvis» per escaneig. |
 
 ## Notes
 

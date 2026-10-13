@@ -283,8 +283,23 @@ def scan_drive(
             )
             files_new = cur.rowcount
         else:
+            # Detall per fitxer de l'escaneig (scan_changes), per conjunts i abans de tocar
+            # inventory: a) desapareguts, b) modificats (mida o data), d) nous.
             # a) absents -> missing_since_utc (només els que encara no ho estaven)
             cur = conn.execute(
+                """
+                INSERT INTO scan_changes (scan_id, drive_id, relative_path, change,
+                                          old_size, old_mtime)
+                SELECT ?, drive_id, relative_path, 'missing', size_bytes, modified_utc
+                FROM inventory
+                WHERE drive_id = ? AND missing_since_utc IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM temp.scan_files s
+                                  WHERE s.relative_path = inventory.relative_path)
+                """,
+                (scan_id, drive_id),
+            )
+            files_missing = cur.rowcount
+            conn.execute(
                 """
                 UPDATE inventory SET missing_since_utc = ?
                 WHERE drive_id = ? AND missing_since_utc IS NULL
@@ -293,17 +308,21 @@ def scan_drive(
                 """,
                 (now, drive_id),
             )
-            files_missing = cur.rowcount
-            # b) quants han canviat (mida o data) abans d'actualitzar-los
-            files_changed = conn.execute(
+            # b) modificats (mida o data) abans d'actualitzar-los; inclou els que
+            #    reapareixen després d'haver estat marcats com a desapareguts
+            cur = conn.execute(
                 """
-                SELECT COUNT(*) FROM inventory i JOIN temp.scan_files s
-                  ON s.relative_path = i.relative_path
+                INSERT INTO scan_changes (scan_id, drive_id, relative_path, change,
+                                          old_size, new_size, old_mtime, new_mtime)
+                SELECT ?, i.drive_id, i.relative_path, 'changed',
+                       i.size_bytes, s.size_bytes, i.modified_utc, s.modified_utc
+                FROM inventory i JOIN temp.scan_files s ON s.relative_path = i.relative_path
                 WHERE i.drive_id = ? AND (i.size_bytes <> s.size_bytes
                                           OR substr(i.modified_utc, 1, 19) IS NOT substr(s.modified_utc, 1, 19))
                 """,
-                (drive_id,),
-            ).fetchone()[0]
+                (scan_id, drive_id),
+            )
+            files_changed = cur.rowcount
             # c) existents: actualitzar metadades; conservar hash si mida+data iguals
             conn.execute(
                 """
@@ -327,8 +346,20 @@ def scan_drive(
                 """,
                 (scan_id, drive_id),
             )
-            # d) nous
+            # d) nous (primer el registre a scan_changes, mentre encara no són a inventory)
             cur = conn.execute(
+                """
+                INSERT INTO scan_changes (scan_id, drive_id, relative_path, change,
+                                          new_size, new_mtime)
+                SELECT ?, ?, s.relative_path, 'new', s.size_bytes, s.modified_utc
+                FROM temp.scan_files s
+                WHERE NOT EXISTS (SELECT 1 FROM inventory i
+                                  WHERE i.drive_id = ? AND i.relative_path = s.relative_path)
+                """,
+                (scan_id, drive_id, drive_id),
+            )
+            files_new = cur.rowcount
+            conn.execute(
                 """
                 INSERT INTO inventory (drive_id, relative_path, name, extension, size_bytes,
                                        modified_utc, first_seen_scan, last_seen_scan)
@@ -339,7 +370,6 @@ def scan_drive(
                 """,
                 (drive_id, scan_id, scan_id, drive_id),
             )
-            files_new = cur.rowcount
 
         # --- agregats (es recalculen sempre amb l'estat actual del disc)
         conn.execute("DELETE FROM folder_stats WHERE drive_id = ?", (drive_id,))
@@ -406,6 +436,8 @@ def audit_direct_to_db(
 
 def delete_drive(conn: sqlite3.Connection, drive_id: str) -> None:
     """Elimina totes les dades d'un disc (inventari, agregats, escaneigs i fitxa)."""
+    if schema.has_table(conn, "scan_changes"):
+        conn.execute("DELETE FROM scan_changes WHERE drive_id = ?", (drive_id,))
     conn.execute("DELETE FROM inventory WHERE drive_id = ?", (drive_id,))
     conn.execute("DELETE FROM folder_stats WHERE drive_id = ?", (drive_id,))
     conn.execute("DELETE FROM by_extension WHERE drive_id = ?", (drive_id,))

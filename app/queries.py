@@ -78,6 +78,54 @@ def get_recent_scans(conn: sqlite3.Connection, limit: int = 10) -> list[dict[str
     return [dict(row) for row in cur.fetchall()]
 
 
+def get_drive_scans(conn: sqlite3.Connection, drive_id: str) -> list[dict[str, Any]]:
+    """Escaneigs d'un disc, del més recent al més antic (índex (drive_id, started_utc))."""
+    cur = conn.execute(
+        """
+        SELECT scan_id, drive_id, root_path, mode, started_utc, finished_utc, status,
+               files_count, total_bytes, files_new, files_changed, files_missing,
+               tool_version, notes
+        FROM scans WHERE drive_id = ? ORDER BY started_utc DESC, scan_id DESC
+        """,
+        (drive_id,),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+SCAN_CHANGE_KINDS = ("new", "changed", "missing")
+
+
+def get_scan_change_counts(conn: sqlite3.Connection, scan_id: int) -> dict[str, int]:
+    """Files de scan_changes per tipus de canvi (rang de l'índex (scan_id, change))."""
+    counts = {k: 0 for k in SCAN_CHANGE_KINDS}
+    for change, n in conn.execute(
+        "SELECT change, COUNT(*) FROM scan_changes WHERE scan_id = ? GROUP BY change", (scan_id,)
+    ):
+        counts[change] = int(n)
+    return counts
+
+
+def get_scan_changes(
+    conn: sqlite3.Connection, scan_id: int, change: str, limit: int, offset: int
+) -> list[dict[str, Any]]:
+    """Pàgina de fitxers d'un escaneig per tipus de canvi, en ordre de ruta.
+
+    Segueix l'ordre de idx_scan_changes_scan (scan_id, change, relative_path): la paginació
+    és incremental, sense ordenació temporal. El total surt de get_scan_change_counts.
+    """
+    if change not in SCAN_CHANGE_KINDS:
+        raise ValueError(f"Tipus de canvi desconegut: {change!r}")
+    cur = conn.execute(
+        """
+        SELECT relative_path, old_size, new_size, old_mtime, new_mtime
+        FROM scan_changes WHERE scan_id = ? AND change = ?
+        ORDER BY relative_path LIMIT ? OFFSET ?
+        """,
+        (scan_id, change, limit, offset),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
 def get_top_extensions(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
     """Top extensions globals (suma de tots els discs)."""
     cur = conn.execute("""

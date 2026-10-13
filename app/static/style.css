@@ -504,6 +504,142 @@ h2 {
   justify-content: flex-end;
 }
 
+/* --- Canvis entre escaneigs --- */
+.breadcrumbs {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0.25rem 0 0.5rem;
+}
+
+.breadcrumbs-sep {
+  margin: 0 0.4rem;
+}
+
+.h1-sub {
+  font-weight: 400;
+  font-size: 0.6em;
+  color: var(--text-muted);
+  margin-left: 0.5rem;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.changes-scan-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.6rem;
+}
+
+.changes-scan-form label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.changes-scan-form select {
+  font: inherit;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.5rem;
+  max-width: 100%;
+}
+
+.changes-scan-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.25rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 1rem;
+}
+
+.changes-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.6rem;
+}
+
+.changes-tab {
+  --tab-color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.changes-tab:hover {
+  border-color: var(--tab-color);
+  text-decoration: none;
+}
+
+.changes-tab.active {
+  background: var(--primary-bg);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.changes-tab-new { --tab-color: #2e7d32; }
+.changes-tab-changed { --tab-color: #ef6c00; }
+.changes-tab-missing { --tab-color: #c62828; }
+
+.changes-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8em;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  background: var(--tab-color);
+  color: #fff;
+}
+
+.breadcrumbs a,
+.changes-table a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.breadcrumbs a:hover,
+.changes-table a:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+
+.changes-summary {
+  margin: 0 0 0.5rem;
+}
+
+.changes-table td.num,
+.changes-table th.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.changes-table .changes-folder {
+  max-width: 28rem;
+  overflow-wrap: anywhere;
+}
+
+.changes-table .changed-cell {
+  font-weight: 600;
+  color: #ef6c00;
+}
+
+html.dark .changes-table .changed-cell {
+  color: #ffb74d;
+}
+
 .stat-disc-actions {
   margin-top: auto;
   padding-top: 0.5rem;
@@ -520,6 +656,7 @@ h2 {
   min-width: 4.5rem;
   flex: 1;
   min-width: 0;
+  text-align: center;
 }
 
 .stat-disc-delete-form {

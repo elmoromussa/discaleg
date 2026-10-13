@@ -215,6 +215,14 @@ async def discs_delete(request: Request):
     return await discs.discs_delete_post(request)
 
 
+@app.get("/discs/{drive_id}/canvis", name="scan_changes_route")
+def scan_changes_route(
+    request: Request, drive_id: str, conn: sqlite3.Connection = Depends(get_db)
+):
+    """Què ha canviat en cada escaneig d'un disc (fitxers nous, modificats i desapareguts)."""
+    return discs.scan_changes_page(request, templates, conn, drive_id)
+
+
 @app.post("/discs/fitxa", name="discs_card")
 async def discs_card(request: Request):
     """Desa la fitxa d'un disc (etiqueta, tipus, ubicació, notes)."""

@@ -55,7 +55,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 ## Flux de dades
 
 - **Històric:** Els scripts de `tools/` generaven CSV (quick_audit_archive) i després s’importaven a la DB (import_audit_to_db). Aquests escaneigs del març de 2026 consten a `scans` com a `legacy-csv-import`.
-- **Escaneig (scan_drive):** `os.scandir` iteratiu (sense seguir enllaços ni junctions) → taula temporal `scan_files` en chunks de 20.000 → fusió en SQL per conjunts dins d'una transacció: absents → `missing_since_utc`; existents → actualitzar metadades conservant el hash si mida i data no han canviat; nous → inserir. `folder_stats` i `by_extension` es recalculen per al disc. El registre a `scans` es crea abans (estat `running`) i es tanca al final (`done`/`aborted`).
+- **Escaneig (scan_drive):** `os.scandir` iteratiu (sense seguir enllaços ni junctions) → taula temporal `scan_files` en chunks de 20.000 → fusió en SQL per conjunts dins d'una transacció: absents → `missing_since_utc`; existents → actualitzar metadades conservant el hash si mida i data no han canviat; nous → inserir. `folder_stats` i `by_extension` es recalculen per al disc. El registre a `scans` es crea abans (estat `running`) i es tanca al final (`done`/`aborted`). En mode update, abans de tocar `inventory`, s'insereixen a `scan_changes` (per conjunts) els fitxers desapareguts (mida i data antigues), els modificats (mida i data abans i després) i els nous; el primer escaneig d'un disc en mode update els registra tots com a nous, i el mode replace i la importació CSV no registren detall.
 - **Hash (tools/hash_files.py):** procés a part, per disc, només files amb `hash_sha256 IS NULL`, ordre per ruta, lots amb commit, Ctrl+C segur, `--max-minutes`, `--only-size-dupes`, `--workers`. Comprova el serial del volum contra `drives.volume_serial`.
 
 ## Rutes
@@ -69,6 +69,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 | `/folders` | Llistat de carpetes per mida (paginat) |
 | `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre + contingut, sense accés al sistema de fitxers). Accepta `?drive=&path=` per obrir una carpeta directament. API: `/api/explorer/roots`, `/api/explorer/tree/children`, `/api/explorer/contents`, `/api/explorer/folder-totals` |
 | `/discs` | Gestió de discs: auditar i incorporar, actualitzar o eliminar un disc, i editar-ne la fitxa (etiqueta, tipus, ubicació, notes; `POST /discs/fitxa`) |
+| `/discs/{drive_id}/canvis` | Què ha canviat en cada escaneig del disc: pestanyes de fitxers nous, modificats (mida i data abans/després) i desapareguts, paginades, des de `scan_changes`; `?scan=&tipus=new|changed|missing&page=` |
 | `/health` | JSON: database_exists, database_path |
 
 ## Mòduls clau
@@ -86,7 +87,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/volume_info.py:** etiqueta, sistema de fitxers, serial i capacitat del volum (Windows via ctypes).
 - **tools/hash_files.py:** CLI de hash SHA-256 incremental per disc.
 - **app/routes/explorer.py:** Pàgina Explorador (GET /explorador; requereix DB).
-- **app/routes/discs.py:** Pàgina Discs (GET sense DB opcional per llista; POST escaneig en segon pla; `discs_card_post` desa la fitxa del disc). L'escaneig només omple l'etiqueta del disc si és buida: la que escriu l'usuari a la fitxa es conserva.
+- **app/routes/discs.py:** Pàgina Discs (GET sense DB opcional per llista; POST escaneig en segon pla; `discs_card_post` desa la fitxa del disc; `scan_changes_page` mostra els canvis per escaneig). L'escaneig només omple l'etiqueta del disc si és buida: la que escriu l'usuari a la fitxa es conserva.
 
 ## Comportament sense DB
 

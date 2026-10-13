@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -62,6 +62,94 @@ def discs_page_get(
             "msg_ok": msg_ok,
             "msg_error": msg_error,
             "job": scan_jobs.get_status(),
+        },
+    )
+
+
+CHANGES_PER_PAGE = 100
+
+_CHANGE_LABELS = {"new": "Nous", "changed": "Modificats", "missing": "Desapareguts"}
+
+
+def _parent_folder(relative_path: str) -> str:
+    """Carpeta d'una ruta relativa de la DB, en format API («/») per a l'enllaç a l'explorador."""
+    i = relative_path.rfind("\\")
+    return relative_path[:i].replace("\\", "/") if i > 0 else ""
+
+
+def scan_changes_page(
+    request: Request,
+    templates: Jinja2Templates,
+    conn: sqlite3.Connection,
+    drive_id: str,
+) -> HTMLResponse:
+    """Vista «què ha canviat» d'un disc: fitxers nous, modificats i desapareguts per escaneig."""
+    drive = queries.get_drive(conn, drive_id)
+    if drive is None:
+        raise HTTPException(status_code=404, detail=f"El disc «{drive_id}» no és a la base de dades.")
+    scans = queries.get_drive_scans(conn, drive_id)
+    scan_raw = request.query_params.get("scan", "").strip()
+    scan = None
+    if scan_raw.isdigit():
+        scan = next((s for s in scans if s["scan_id"] == int(scan_raw)), None)
+    if scan is None and scans:
+        scan = scans[0]
+    change = request.query_params.get("tipus", "new").strip().lower()
+    if change not in queries.SCAN_CHANGE_KINDS:
+        change = "new"
+    page = max(1, int(request.query_params.get("page", 1) or 1))
+
+    counts = {k: 0 for k in queries.SCAN_CHANGE_KINDS}
+    rows: list[dict] = []
+    total = 0
+    total_pages = 0
+    prev_url = next_url = None
+    has_detail = False
+    if scan is not None:
+        counts = queries.get_scan_change_counts(conn, scan["scan_id"])
+        has_detail = any(counts.values())
+        total = counts[change]
+        total_pages = max(1, -(-total // CHANGES_PER_PAGE)) if total else 0
+        page = min(page, total_pages) if total_pages else 1
+        rows = queries.get_scan_changes(
+            conn, scan["scan_id"], change, CHANGES_PER_PAGE, (page - 1) * CHANGES_PER_PAGE
+        )
+        for r in rows:
+            r["folder"] = _parent_folder(r["relative_path"])
+            r["name"] = r["relative_path"].rsplit("\\", 1)[-1]
+        params = dict(request.query_params)
+        params["scan"] = str(scan["scan_id"])
+        params["tipus"] = change
+        if page > 1:
+            params["page"] = str(page - 1)
+            prev_url = str(request.url.include_query_params(**params))
+        if page < total_pages:
+            params["page"] = str(page + 1)
+            next_url = str(request.url.include_query_params(**params))
+
+    def tab_url(kind: str) -> str:
+        return str(request.url.include_query_params(
+            scan=scan["scan_id"] if scan else "", tipus=kind, page=1))
+
+    return templates.TemplateResponse(request, "scan_changes.html",
+        {
+            "request": request,
+            "drive": drive,
+            "drive_kinds": schema.DRIVE_KINDS,
+            "scans": scans,
+            "scan": scan,
+            "change": change,
+            "change_labels": _CHANGE_LABELS,
+            "counts": counts,
+            "has_detail": has_detail,
+            "rows": rows,
+            "total": total,
+            "page": page,
+            "total_pages": total_pages,
+            "prev_url": prev_url,
+            "next_url": next_url,
+            "tab_urls": {k: tab_url(k) for k in queries.SCAN_CHANGE_KINDS},
+            "per_page": CHANGES_PER_PAGE,
         },
     )
 
