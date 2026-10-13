@@ -26,13 +26,46 @@ def _extension_match_values(extensions: list[str]) -> list[str]:
 def get_drives_summary(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Fitxa i comptadors per disc (taula drives; fitxers presents, cobertura de hash, últim escaneig)."""
     cur = conn.execute("""
-        SELECT drive_id, label, kind, filesystem, volume_serial, capacity_bytes, status, notes,
+        SELECT drive_id, label, kind, location, filesystem, volume_serial, capacity_bytes, status, notes,
                files_count AS files, total_bytes, hashed_files, hashed_bytes,
-               last_root_path, last_scan_utc,
+               last_root_path, last_scan_utc, updated_utc,
                CASE WHEN files_count > 0 THEN 100.0 * hashed_files / files_count ELSE 0 END AS hashed_pct
         FROM drives ORDER BY drive_id
     """)
     return [dict(row) for row in cur.fetchall()]
+
+
+def get_drive(conn: sqlite3.Connection, drive_id: str) -> dict[str, Any] | None:
+    """Fitxa completa d'un disc, o None si no existeix."""
+    row = conn.execute("SELECT * FROM drives WHERE drive_id = ?", (drive_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_drive_card(
+    conn: sqlite3.Connection,
+    drive_id: str,
+    label: str | None,
+    kind: str | None,
+    location: str | None,
+    notes: str | None,
+) -> bool:
+    """Desa la fitxa editable d'un disc (etiqueta, tipus, ubicació, notes). Buit -> NULL.
+
+    Retorna False si el disc no existeix. `kind` ha de ser una clau de schema.DRIVE_KINDS o None.
+    """
+    from app.schema import DRIVE_KINDS, utc_now_iso
+
+    if kind is not None and kind not in DRIVE_KINDS:
+        raise ValueError(f"Tipus de disc desconegut: {kind!r}")
+    cur = conn.execute(
+        """
+        UPDATE drives SET label = ?, kind = ?, location = ?, notes = ?, updated_utc = ?
+        WHERE drive_id = ?
+        """,
+        (label or None, kind or None, location or None, notes or None, utc_now_iso(), drive_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def get_recent_scans(conn: sqlite3.Connection, limit: int = 10) -> list[dict[str, Any]]:

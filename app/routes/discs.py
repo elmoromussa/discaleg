@@ -58,11 +58,70 @@ def discs_page_get(
             "request": request,
             "drives": drives,
             "scans": scans,
+            "drive_kinds": schema.DRIVE_KINDS,
             "msg_ok": msg_ok,
             "msg_error": msg_error,
             "job": scan_jobs.get_status(),
         },
     )
+
+
+# Longituds màximes dels camps de la fitxa (evitar textos desmesurats a la DB)
+_CARD_MAX = {"label": 120, "location": 200, "notes": 4000}
+
+
+def _clean_field(value: str | None, name: str) -> str:
+    """Normalitza un camp de text de la fitxa: espais, salts de línia i longitud."""
+    s = (value or "").replace("\r\n", "\n").strip()
+    if name != "notes":
+        s = " ".join(s.split())
+    limit = _CARD_MAX[name]
+    return s[:limit] if len(s) > limit else s
+
+
+async def discs_card_post(request: Request) -> RedirectResponse:
+    """Desa la fitxa editable d'un disc (etiqueta, tipus, ubicació, notes) i torna a /discs."""
+    try:
+        form = await request.form()
+        drive_id = (form.get("drive_id") or "").strip()
+        if not drive_id:
+            return RedirectResponse(
+                url="/discs?error=" + quote("Cal indicar l'identificador del disc (drive_id)."),
+                status_code=302,
+            )
+        if not database_path.is_file():
+            return RedirectResponse(url="/discs?error=" + quote("No hi ha base de dades."), status_code=302)
+        kind = (form.get("kind") or "").strip() or None
+        if kind is not None and kind not in schema.DRIVE_KINDS:
+            return RedirectResponse(
+                url="/discs?error=" + quote(f"Tipus de disc desconegut: {kind}"), status_code=302
+            )
+        conn = sqlite3.connect(str(database_path), timeout=30.0)
+        try:
+            found = queries.update_drive_card(
+                conn,
+                drive_id,
+                label=_clean_field(form.get("label"), "label"),
+                kind=kind,
+                location=_clean_field(form.get("location"), "location"),
+                notes=_clean_field(form.get("notes"), "notes"),
+            )
+        finally:
+            conn.close()
+        if not found:
+            return RedirectResponse(
+                url="/discs?error=" + quote(f"El disc «{drive_id}» no és a la base de dades."),
+                status_code=302,
+            )
+        return RedirectResponse(
+            url="/discs?ok=" + quote(f"Fitxa de «{drive_id}» desada.") + "#disc-" + quote(drive_id),
+            status_code=302,
+        )
+    except Exception as e:
+        logging.exception("Error en POST /discs/fitxa")
+        return RedirectResponse(
+            url="/discs?error=" + quote(_sanitize_error_message(str(e))), status_code=302
+        )
 
 
 def _error_html_response(message: str) -> HTMLResponse:

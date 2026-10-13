@@ -5,7 +5,7 @@ layout: default
 
 # Escaneig, actualització i hash
 
-## Esquema de la base de dades (versió 2)
+## Esquema de la base de dades
 
 | Taula | Contingut |
 |-------|-----------|
@@ -19,6 +19,8 @@ Els fitxers sense extensió tenen `extension = '(no_ext)'`.
 **Versió 3: índex de text.** `inventory_fts` és un índex FTS5 amb tokenitzador *trigram* sobre nom i ruta, mantingut per triggers. La cerca de fitxers l'usa per podar candidats i després aplica el filtre exacte de sempre, així que els resultats són els mateixos però en mil·lisegons en lloc de segons. Fa créixer la DB (uns 2 GB per a 4,8 M de fitxers) i la construcció inicial tarda uns dos minuts. Fragments de menys de 3 caràcters no es poden indexar i cauen al camí lent.
 
 **Versió 5: totes les carpetes i explorador ràpid.** `folder_stats` passa a contenir totes les carpetes, també les que no tenen cap fitxer directe (abans en faltaven 143.503 de 529.179). L'Explorador es construeix sobre `folder_stats` i llegeix els fitxers d'una carpeta per rang de l'índex, així que és complet i respon en mil·lisegons sigui quin sigui el disc. L'índex de hash passa a ser cobridor per als duplicats per contingut. La migració tarda uns 10 s.
+
+**Versió 6: canvis per escaneig, índex de hash per disc i espais virtuals.** `scan_changes` guarda, per a cada escaneig en mode actualització, quins fitxers són nous, quins han canviat (mida o data abans i després) i quins han desaparegut. L'índex parcial `(drive_id, hash_sha256, size_bytes)` permet recórrer els fitxers amb hash d'un disc per als informes de còpia única i de comparació entre discs. Les taules `spaces`, `items`, `space_members`, `tags` i `item_tags` sostenen els espais virtuals (cerques guardades, col·leccions i etiquetes). Tot és additiu: la migració tarda segons i no reescriu dades.
 
 **Versió 4: índex per a duplicats.** L'índex de nom se substitueix per un índex parcial cobridor sobre nom, mida, disc i extensió dels fitxers presents. Els duplicats per nom i per nom+mida es resolen recorrent només l'índex (d'uns 11 s per pàgina a uns 2 s amb 4,8 M de fitxers), i la DB només creix uns 50 MB.
 

@@ -215,6 +215,12 @@ async def discs_delete(request: Request):
     return await discs.discs_delete_post(request)
 
 
+@app.post("/discs/fitxa", name="discs_card")
+async def discs_card(request: Request):
+    """Desa la fitxa d'un disc (etiqueta, tipus, ubicació, notes)."""
+    return await discs.discs_card_post(request)
+
+
 def _get_windows_drives() -> list[str]:
     """Llista d'unitats a Windows (GetLogicalDrives, os.path.exists o llista per defecte)."""
     # 1) API de Windows

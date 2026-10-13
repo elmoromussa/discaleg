@@ -67,13 +67,46 @@
   <h2>Discs a la base de dades</h2>
   <div class="stats-grid stats-grid-discs">
     {% for d in drives %}
-    <div class="stat stat-disc">
-      <strong>{{ d.drive_id }}</strong>
-      {% if d.label %}<span class="mono">{{ d.label }}</span><br>{% endif %}
-      <span>{{ d.files | default(0) | int }} fitxers</span><br>
-      <span class="bytes">{{ d.total_bytes | default(0) | int | format_bytes }}</span><br>
-      <span title="Fitxers amb SHA-256 calculat">Hash: {{ '%.1f' | format(d.hashed_pct | default(0)) }} %</span><br>
-      <span title="{{ d.last_root_path or '' }}">Escaneig: {{ (d.last_scan_utc or '—')[:10] }}</span>
+    <div class="stat stat-disc" id="disc-{{ d.drive_id }}">
+      <div class="stat-disc-head">
+        <strong>{{ d.drive_id }}</strong>
+        {% if d.kind %}<span class="disc-kind" title="Tipus de suport">{{ drive_kinds.get(d.kind, d.kind) }}</span>{% endif %}
+      </div>
+      <dl class="disc-card">
+        <div><dt>Etiqueta</dt><dd>{% if d.label %}{{ d.label }}{% else %}<span class="disc-empty">—</span>{% endif %}</dd></div>
+        <div><dt>Ubicació</dt><dd>{% if d.location %}{{ d.location }}{% else %}<span class="disc-empty">—</span>{% endif %}</dd></div>
+        {% if d.notes %}<div class="disc-card-notes"><dt>Notes</dt><dd title="{{ d.notes }}">{{ d.notes }}</dd></div>{% endif %}
+        <div><dt>Contingut</dt><dd>{{ d.files | default(0) | int }} fitxers · <span class="bytes">{{ d.total_bytes | default(0) | int | format_bytes }}</span></dd></div>
+        <div><dt>Hash</dt><dd title="Fitxers amb SHA-256 calculat">{{ '%.1f' | format(d.hashed_pct | default(0)) }} %</dd></div>
+        <div><dt>Escaneig</dt><dd title="{{ d.last_root_path or '' }}">{{ (d.last_scan_utc or '—')[:10] }}{% if d.last_root_path %} <span class="mono disc-root">{{ d.last_root_path }}</span>{% endif %}</dd></div>
+        {% if d.filesystem or d.volume_serial %}<div><dt>Volum</dt><dd><span class="mono">{{ d.filesystem or '' }}{% if d.filesystem and d.volume_serial %} · {% endif %}{{ d.volume_serial or '' }}</span></dd></div>{% endif %}
+      </dl>
+      <details class="disc-edit">
+        <summary class="btn btn-update disc-edit-toggle" aria-label="Edita la fitxa de {{ d.drive_id }}">Edita la fitxa</summary>
+        <form method="post" action="{{ request.url_for('discs_card') }}" class="disc-edit-form">
+          <input type="hidden" name="drive_id" value="{{ d.drive_id }}">
+          <label>Etiqueta
+            <input type="text" name="label" value="{{ d.label or '' }}" maxlength="120" placeholder="ex: Fotos 2019–2021" autocomplete="off">
+          </label>
+          <label>Tipus
+            <select name="kind">
+              <option value="" {% if not d.kind %}selected{% endif %}>— sense indicar —</option>
+              {% for k, v in drive_kinds.items() %}
+              <option value="{{ k }}" {% if d.kind == k %}selected{% endif %}>{{ v }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Ubicació
+            <input type="text" name="location" value="{{ d.location or '' }}" maxlength="200" placeholder="ex: calaix despatx, caixa 3" autocomplete="off">
+          </label>
+          <label>Notes
+            <textarea name="notes" rows="3" maxlength="4000" placeholder="Opcional">{{ d.notes or '' }}</textarea>
+          </label>
+          <div class="disc-edit-actions">
+            <button type="submit" class="btn btn-primary btn-sm">Desa la fitxa</button>
+          </div>
+        </form>
+      </details>
       <div class="stat-disc-actions">
         <button type="button" class="btn btn-update" data-drive-id="{{ d.drive_id }}" aria-label="Actualitzar unitat {{ d.drive_id }}">Actualitzar</button>
         <form method="post" action="{{ request.url_for('discs_delete') }}" class="stat-disc-delete-form" onsubmit="return confirm('Eliminar la unitat de la base de dades? Aquesta acció no es pot desfer.');">

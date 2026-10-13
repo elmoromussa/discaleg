@@ -176,7 +176,7 @@ def scan_drive(
     )
     conn.execute(
         """
-        UPDATE drives SET label = COALESCE(?, label), filesystem = COALESCE(?, filesystem),
+        UPDATE drives SET label = COALESCE(label, ?), filesystem = COALESCE(?, filesystem),
                volume_serial = CASE WHEN ? THEN COALESCE(?, volume_serial)
                                     ELSE COALESCE(volume_serial, ?) END,
                capacity_bytes = COALESCE(?, capacity_bytes), updated_utc = ?

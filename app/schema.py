@@ -14,6 +14,12 @@ Versió (PRAGMA user_version):
          índexs (drive_id, folder_depth) i (drive_id, folder_path) per a l'explorador;
          idx_inventory_hash substituït per un índex parcial cobridor
          (hash_sha256, size_bytes, drive_id) per als duplicats per contingut.
+  6    + scan_changes (detall per fitxer de cada escaneig en mode update: nous, modificats,
+         desapareguts), índex parcial cobridor (drive_id, hash_sha256, size_bytes) per als
+         informes de còpia única i comparació entre discs, i taules dels espais virtuals:
+         spaces (jeràrquics; cerques guardades o col·leccions), items (identitat d'un fitxer
+         per hash amb disc+ruta com a referència secundària, o d'una carpeta per prefix),
+         space_members, tags, item_tags. Tot additiu: la migració tarda segons.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -26,7 +32,19 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+# Tipus de suport admesos a drives.kind (CHECK) i la seva etiqueta a la interfície.
+DRIVE_KINDS: dict[str, str] = {
+    "hdd": "Disc dur",
+    "ssd": "SSD",
+    "nvme": "NVMe",
+    "usb": "Memòria USB",
+    "sd": "Targeta SD",
+    "optical": "Òptic",
+    "network": "Xarxa",
+    "other": "Altre",
+}
 
 # Extensió canònica per a fitxers sense extensió (coincideix amb l'escàner directe).
 NO_EXT = "(no_ext)"
@@ -205,6 +223,79 @@ CREATE INDEX IF NOT EXISTS idx_inventory_hash_size
 """
 
 
+# v6: canvis per fitxer de cada escaneig, índex per disc dels fitxers amb hash, espais virtuals.
+_DDL_V6 = """
+CREATE TABLE IF NOT EXISTS scan_changes (
+    id            INTEGER PRIMARY KEY,
+    scan_id       INTEGER NOT NULL REFERENCES scans(scan_id),
+    drive_id      TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    change        TEXT NOT NULL CHECK (change IN ('new', 'changed', 'missing')),
+    old_size      INTEGER,
+    new_size      INTEGER,
+    old_mtime     TEXT,
+    new_mtime     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_scan_changes_scan ON scan_changes(scan_id, change, relative_path);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_drive_hash
+    ON inventory(drive_id, hash_sha256, size_bytes)
+    WHERE hash_sha256 IS NOT NULL AND missing_since_utc IS NULL;
+
+CREATE TABLE IF NOT EXISTS spaces (
+    space_id    INTEGER PRIMARY KEY,
+    parent_id   INTEGER REFERENCES spaces(space_id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('smart', 'manual')),
+    query_json  TEXT,
+    description TEXT,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_utc TEXT NOT NULL,
+    updated_utc TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_spaces_parent ON spaces(parent_id, sort_order, name);
+
+CREATE TABLE IF NOT EXISTS items (
+    item_id       INTEGER PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('file', 'folder')),
+    drive_id      TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    hash_sha256   TEXT,
+    size_bytes    INTEGER,
+    name          TEXT,
+    range_lo      TEXT,
+    range_hi      TEXT,
+    created_utc   TEXT NOT NULL,
+    UNIQUE (kind, drive_id, relative_path)
+);
+CREATE INDEX IF NOT EXISTS idx_items_hash ON items(hash_sha256) WHERE hash_sha256 IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS space_members (
+    space_id  INTEGER NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+    item_id   INTEGER NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+    added_utc TEXT NOT NULL,
+    note      TEXT,
+    PRIMARY KEY (space_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_space_members_item ON space_members(item_id);
+
+CREATE TABLE IF NOT EXISTS tags (
+    tag_id      INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    color       TEXT,
+    created_utc TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS item_tags (
+    item_id   INTEGER NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+    tag_id    INTEGER NOT NULL REFERENCES tags(tag_id) ON DELETE CASCADE,
+    added_utc TEXT NOT NULL,
+    PRIMARY KEY (item_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);
+"""
+
+
 def _exec_statements(conn: sqlite3.Connection, sql: str) -> None:
     """Executa un bloc DDL sentència a sentència (executescript faria COMMIT implícit).
 
@@ -259,6 +350,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _exec_statements(conn, _DDL_V3_FTS)
         _exec_statements(conn, _DDL_V4_INDEXES)
         _exec_statements(conn, _DDL_V5_INDEXES)
+        _exec_statements(conn, _DDL_V6)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -295,6 +387,8 @@ def migrate(
         _migrate_to_v4(conn, log)
     if get_user_version(conn) < 5:
         _migrate_to_v5(conn, log)
+    if get_user_version(conn) < 6:
+        _migrate_to_v6(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -474,6 +568,20 @@ def _migrate_to_v5(conn: sqlite3.Connection, log: Callable[[str], None]) -> None
         conn.execute("ROLLBACK")
         raise
     log("  índexs creats")
+
+
+def _migrate_to_v6(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 6 (canvis per escaneig, índex de hash per disc, espais virtuals)…")
+    conn.execute("BEGIN")
+    try:
+        _exec_statements(conn, _DDL_V6)
+        conn.execute("PRAGMA user_version = 6")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log("  taules scan_changes, spaces, items, space_members, tags, item_tags i índex "
+        "idx_inventory_drive_hash creats")
 
 
 def refresh_drive_counters(

@@ -14,6 +14,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from app.schema import DRIVE_KINDS
+
 SEP = "\\"
 
 
@@ -46,7 +48,7 @@ def get_explorer_drives(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     cur = conn.execute(
         """
         SELECT drive_id, label, kind, status, files_count, total_bytes,
-               last_root_path, last_scan_utc
+               last_root_path, last_scan_utc, location, notes
         FROM drives ORDER BY drive_id
         """
     )
@@ -55,11 +57,14 @@ def get_explorer_drives(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             "drive_id": r[0],
             "label": r[1] or "",
             "kind": r[2] or "",
+            "kind_label": DRIVE_KINDS.get(r[2] or "", ""),
             "status": r[3] or "active",
             "files_count": int(r[4] or 0),
             "total_bytes": int(r[5] or 0),
             "root_path": r[6] or "",
             "last_scan_utc": r[7] or "",
+            "location": r[8] or "",
+            "notes": r[9] or "",
         }
         for r in cur.fetchall()
     ]
@@ -67,8 +72,9 @@ def get_explorer_drives(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         return rows
     cur = conn.execute("SELECT DISTINCT drive_id FROM inventory ORDER BY drive_id")
     return [
-        {"drive_id": r[0], "label": "", "kind": "", "status": "active", "files_count": 0,
-         "total_bytes": 0, "root_path": "", "last_scan_utc": ""}
+        {"drive_id": r[0], "label": "", "kind": "", "kind_label": "", "status": "active",
+         "files_count": 0, "total_bytes": 0, "root_path": "", "last_scan_utc": "",
+         "location": "", "notes": ""}
         for r in cur.fetchall()
     ]
 

@@ -204,10 +204,12 @@
       var d = opts.drive;
       if (d.label) row.appendChild(el('span', 'tree-sublabel', d.label));
       if (d.total_bytes) row.appendChild(el('span', 'tree-meta', fmtBytes(d.total_bytes)));
-      var tip = [d.label, d.kind, d.status !== 'active' ? d.status : '',
+      var tip = [d.label, d.kind_label || d.kind, d.location ? 'a ' + d.location : '',
+        d.status !== 'active' ? d.status : '',
         d.files_count ? plural(d.files_count, 'fitxer', 'fitxers') : '',
         d.last_scan_utc ? 'escanejat ' + fmtDate(d.last_scan_utc) : '',
         d.root_path ? 'arrel ' + d.root_path : ''].filter(Boolean).join(' · ');
+      if (d.notes) tip += '\n' + d.notes;
       if (tip) row.title = tip;
     } else {
       row.title = opts.name;
