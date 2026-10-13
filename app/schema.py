@@ -20,6 +20,12 @@ Versió (PRAGMA user_version):
          spaces (jeràrquics; cerques guardades o col·leccions), items (identitat d'un fitxer
          per hash amb disc+ruta com a referència secundària, o d'una carpeta per prefix),
          space_members, tags, item_tags. Tot additiu: la migració tarda segons.
+  7    + identitat física del disc (drives: free_bytes, physical_size_bytes, health_status;
+         scans: serial_number, model, interface, free_bytes, health_status, errors_count),
+         inventory.created_utc i inventory.attributes (data de creació i atributs de Windows,
+         sense efecte sobre el criteri de «modificat»), i la taula read_errors amb les carpetes
+         i fitxers que l'escaneig o el hash no han pogut llegir. Només ALTER TABLE ADD COLUMN
+         i una taula nova: la migració tarda segons.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -32,7 +38,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Tipus de suport admesos a drives.kind (CHECK) i la seva etiqueta a la interfície.
 DRIVE_KINDS: dict[str, str] = {
@@ -54,6 +60,14 @@ SHA256_EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
 # Nom de la taula FTS5 (consultada des de queries.py)
 FTS_TABLE = "inventory_fts"
+
+# Fases en què es pot registrar un error de lectura (read_errors.phase) i la seva etiqueta.
+READ_ERROR_PHASES: dict[str, str] = {
+    "scandir": "Carpeta il·legible",
+    "entry": "Entrada il·legible",
+    "hash_stat": "Hash: stat",
+    "hash_read": "Hash: lectura",
+}
 
 
 def utc_now_iso() -> str:
@@ -296,6 +310,44 @@ CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);
 """
 
 
+# v7: identitat física del disc, data de creació i atributs per fitxer, errors de lectura.
+# Columnes noves (taula -> [(nom, DDL)]), afegides amb ALTER TABLE si falten (idempotent).
+_V7_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "drives": [
+        ("free_bytes", "INTEGER"),           # espai lliure del volum a l'últim escaneig
+        ("physical_size_bytes", "INTEGER"),  # mida del disc físic (capacity_bytes és la del volum)
+        ("health_status", "TEXT"),           # Get-Disk HealthStatus (Healthy, Warning, Unhealthy)
+    ],
+    "scans": [
+        ("serial_number", "TEXT"),   # maquinari vist en aquest escaneig (també si és genèric)
+        ("model", "TEXT"),
+        ("interface", "TEXT"),       # bus: NVMe, SATA, USB, …
+        ("free_bytes", "INTEGER"),
+        ("health_status", "TEXT"),
+        ("errors_count", "INTEGER"),  # files de read_errors d'aquest escaneig
+    ],
+    "inventory": [
+        ("created_utc", "TEXT"),   # st_birthtime (data de creació)
+        ("attributes", "INTEGER"),  # st_file_attributes (atributs de Windows)
+    ],
+}
+
+_DDL_V7 = """
+CREATE TABLE IF NOT EXISTS read_errors (
+    id            INTEGER PRIMARY KEY,
+    drive_id      TEXT NOT NULL,
+    scan_id       INTEGER REFERENCES scans(scan_id),
+    phase         TEXT NOT NULL CHECK (phase IN ('scandir', 'entry', 'hash_stat', 'hash_read')),
+    relative_path TEXT NOT NULL,
+    error_code    INTEGER,
+    message       TEXT,
+    created_utc   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_read_errors_scan ON read_errors(scan_id);
+CREATE INDEX IF NOT EXISTS idx_read_errors_drive_path ON read_errors(drive_id, relative_path);
+"""
+
+
 def _exec_statements(conn: sqlite3.Connection, sql: str) -> None:
     """Executa un bloc DDL sentència a sentència (executescript faria COMMIT implícit).
 
@@ -316,13 +368,29 @@ def _exec_statements(conn: sqlite3.Connection, sql: str) -> None:
                 conn.execute(stmt)
 
 
-def _add_missing_inventory_columns(conn: sqlite3.Connection) -> list[str]:
-    existing = table_columns(conn, "inventory")
+def _add_missing_columns(
+    conn: sqlite3.Connection, table: str, columns: list[tuple[str, str]]
+) -> list[str]:
+    """ALTER TABLE ADD COLUMN per a cada columna que falti (no reescriu la taula)."""
+    existing = table_columns(conn, table)
     added = []
-    for name, ddl in _INVENTORY_V2_COLUMNS:
+    for name, ddl in columns:
         if name not in existing:
-            conn.execute(f"ALTER TABLE inventory ADD COLUMN {name} {ddl}")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
             added.append(name)
+    return added
+
+
+def _add_missing_inventory_columns(conn: sqlite3.Connection) -> list[str]:
+    return _add_missing_columns(conn, "inventory", _INVENTORY_V2_COLUMNS)
+
+
+def _apply_v7(conn: sqlite3.Connection) -> list[str]:
+    """Columnes i taula de la v7 (idempotent). Retorna les columnes afegides."""
+    added: list[str] = []
+    for table, columns in _V7_COLUMNS.items():
+        added += [f"{table}.{c}" for c in _add_missing_columns(conn, table, columns)]
+    _exec_statements(conn, _DDL_V7)
     return added
 
 
@@ -351,6 +419,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _exec_statements(conn, _DDL_V4_INDEXES)
         _exec_statements(conn, _DDL_V5_INDEXES)
         _exec_statements(conn, _DDL_V6)
+        _apply_v7(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -389,6 +458,8 @@ def migrate(
         _migrate_to_v5(conn, log)
     if get_user_version(conn) < 6:
         _migrate_to_v6(conn, log)
+    if get_user_version(conn) < 7:
+        _migrate_to_v7(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -582,6 +653,20 @@ def _migrate_to_v6(conn: sqlite3.Connection, log: Callable[[str], None]) -> None
         raise
     log("  taules scan_changes, spaces, items, space_members, tags, item_tags i índex "
         "idx_inventory_drive_hash creats")
+
+
+def _migrate_to_v7(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 7 (identitat física del disc, data de creació i atributs, "
+        "errors de lectura)…")
+    conn.execute("BEGIN")
+    try:
+        added = _apply_v7(conn)
+        conn.execute("PRAGMA user_version = 7")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}; taula read_errors creada")
 
 
 def refresh_drive_counters(

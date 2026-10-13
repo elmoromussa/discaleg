@@ -29,7 +29,7 @@ from app import schema
 from app.schema import NO_EXT, init_schema, utc_now_iso  # noqa: F401  (re-export)
 from app.volume_info import get_volume_info
 
-TOOL_VERSION = "discaleg-scan/2.3"
+TOOL_VERSION = "discaleg-scan/3.0"
 # Carpetes de sistema a l'arrel del volum que no formen part de l'arxiu (comparació en majúscules)
 EXCLUDE_ROOT_DIRS = frozenset({"$RECYCLE.BIN", "SYSTEM VOLUME INFORMATION"})
 # Guarda contra arrel/disc equivocat en mode update: si el disc tenia >= GUARD_MIN_FILES fitxers
@@ -436,8 +436,9 @@ def audit_direct_to_db(
 
 def delete_drive(conn: sqlite3.Connection, drive_id: str) -> None:
     """Elimina totes les dades d'un disc (inventari, agregats, escaneigs i fitxa)."""
-    if schema.has_table(conn, "scan_changes"):
-        conn.execute("DELETE FROM scan_changes WHERE drive_id = ?", (drive_id,))
+    for table in ("scan_changes", "read_errors"):
+        if schema.has_table(conn, table):
+            conn.execute(f"DELETE FROM {table} WHERE drive_id = ?", (drive_id,))
     conn.execute("DELETE FROM inventory WHERE drive_id = ?", (drive_id,))
     conn.execute("DELETE FROM folder_stats WHERE drive_id = ?", (drive_id,))
     conn.execute("DELETE FROM by_extension WHERE drive_id = ?", (drive_id,))
