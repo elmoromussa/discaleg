@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}Còpies — DiscScope{% endblock %}
+{% block content %}
+<h1>Còpies</h1>
+<p class="page-description">
+  Què està segur i què no: fitxers que només existeixen en un disc (<strong>còpia única</strong>) i si tot el que hi ha en un disc o carpeta és també en un altre (<strong>comparació</strong>).
+  El criteri fiable és el <strong>contingut</strong> (SHA-256): cobertura actual <strong>{{ '%.1f' | format(coverage.pct) }} %</strong> ({{ coverage.hashed }} de {{ coverage.files }} fitxers). Mentre no hi hagi hashes, el criteri <strong>nom i mida</strong> dona una aproximació.
+</p>
+
+<nav class="changes-tabs" aria-label="Tipus d'informe">
+  <a href="{{ request.url_for('copies_route') }}?view=unique&amp;mode={{ mode }}" class="changes-tab{% if view == 'unique' %} active{% endif %}" {% if view == 'unique' %}aria-current="page"{% endif %}>Còpia única</a>
+  <a href="{{ request.url_for('copies_route') }}?view=compare&amp;mode={{ mode }}" class="changes-tab{% if view == 'compare' %} active{% endif %}" {% if view == 'compare' %}aria-current="page"{% endif %}>Comparació entre discs</a>
+</nav>
+
+<div class="card advanced-search">
+  <form method="get" action="{{ request.url_for('copies_route') }}" class="search-form-grid copies-form">
+    <input type="hidden" name="view" value="{{ view }}">
+    <input type="hidden" name="submitted" value="1">
+    <input type="hidden" name="show" value="{{ show }}">
+    <fieldset class="advanced-search-fieldset">
+      <legend>{% if view == 'compare' %}Comparació{% else %}Còpia única{% endif %}</legend>
+      <div class="form-group">
+        <label for="drive">{% if view == 'compare' %}Tot el que hi ha a{% else %}Disc{% endif %}</label>
+        <select name="drive" id="drive">
+          {% if view == 'unique' %}<option value="" {% if not drive %}selected{% endif %}>— tots els discs (resum) —</option>{% endif %}
+          {% for d in drive_ids %}<option value="{{ d }}" {% if d == drive %}selected{% endif %}>{{ d }}</option>{% endfor %}
+        </select>
+      </div>
+      {% if view == 'compare' %}
+      <div class="form-group">
+        <label for="to">és també a</label>
+        <select name="to" id="to">
+          <option value="">— trieu un disc —</option>
+          {% for d in drive_ids %}<option value="{{ d }}" {% if d == to_drive %}selected{% endif %}>{{ d }}</option>{% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="form-group">
+        <label for="path">Carpeta (opcional)</label>
+        <input type="text" name="path" id="path" value="{{ path }}" placeholder="ex: Fotos/2023 — buit = tot el disc" autocomplete="off">
+        <p class="form-hint">Ruta relativa a l'arrel escanejada, amb «/» o «\».</p>
+      </div>
+      <div class="form-group">
+        <label for="mode">Criteri</label>
+        <select name="mode" id="mode">
+          <option value="hash" {% if mode == 'hash' %}selected{% endif %}>Contingut (SHA-256)</option>
+          <option value="name-size" {% if mode == 'name-size' %}selected{% endif %}>Nom i mida (aproximat)</option>
+        </select>
+      </div>
+      {% if view == 'unique' %}
+      <div class="form-group">
+        <label for="scope">Compta com a còpia</label>
+        <select name="scope" id="scope">
+          <option value="cross" {% if scope == 'cross' %}selected{% endif %}>Només les d'altres discs</option>
+          <option value="any" {% if scope == 'any' %}selected{% endif %}>També les del mateix disc</option>
+        </select>
+      </div>
+      {% endif %}
+    </fieldset>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{% if view == 'compare' %}Compara{% else %}Calcula{% endif %}</button>
+      {% if url_swap and drive and to_drive %}<a class="btn btn-secondary" href="{{ url_swap }}">Inverteix la direcció</a>{% endif %}
+    </div>
+  </form>
+</div>
+
+{% if error %}
+<p class="msg-error" role="alert">{{ error }}</p>
+{% endif %}
+
+{% if overview %}
+<h2>Còpia única per disc <span class="muted">({% if mode == 'hash' %}per contingut{% else %}per nom i mida{% endif %}{% if scope == 'any' %}, comptant còpies dins del mateix disc{% endif %})</span></h2>
+<div class="table-wrapper">
+  <table class="copies-table">
+    <thead><tr><th>Disc</th><th class="num">Fitxers presents</th><th class="num">Sense còpia</th><th class="num">% fitxers</th><th class="num">Mida sense còpia</th>{% if mode == 'hash' %}<th class="num">No comprovables (sense hash)</th>{% endif %}<th></th></tr></thead>
+    <tbody>
+      {% for s in overview %}
+      <tr>
+        <td><strong>{{ s.drive_id }}</strong></td>
+        <td class="num">{{ s.scope_files }}</td>
+        <td class="num {% if s.files %}copies-warn{% endif %}">{{ s.files }}</td>
+        <td class="num">{% if s.comparable %}{{ '%.1f' | format(100.0 * s.files / s.comparable) }} %{% else %}—{% endif %}</td>
+        <td class="num bytes">{{ s.bytes | format_bytes }}</td>
+        {% if mode == 'hash' %}<td class="num muted">{{ s.unverifiable }}</td>{% endif %}
+        <td><a href="{{ request.url_for('copies_route') }}?view=unique&amp;mode={{ mode }}&amp;scope={{ scope }}&amp;drive={{ s.drive_id | urlencode }}&amp;submitted=1">Detall</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="form-hint">Temps de càlcul: {{ '%.2f' | format(elapsed) }} s (els resums es recorden fins al proper escaneig o lot de hash).</p>
+{% endif %}
+
+{% if summary %}
+<section class="copies-summary" aria-label="Resum">
+  <div class="stats-grid copies-stats">
+    <div class="stat">
+      <strong>{{ summary.files }}</strong>
+      <span>{% if view == 'compare' %}fitxers de {{ drive }}{% if path %} › {{ path.replace('/', ' › ') }}{% endif %} que <b>falten</b> a {{ to_drive }}{% else %}fitxers sense cap còpia{% if scope == 'cross' %} en un altre disc{% endif %}{% endif %}</span>
+      {% if summary.comparable %}<span class="muted">{{ '%.1f' | format(100.0 * summary.files / summary.comparable) }} % dels {{ summary.comparable }} comparables</span>{% endif %}
+    </div>
+    <div class="stat">
+      <strong class="bytes">{{ summary.bytes | format_bytes }}</strong>
+      <span>{% if view == 'compare' %}que caldria copiar{% else %}que només existeixen aquí{% endif %}</span>
+      <span class="muted">de {{ summary.scope_bytes | format_bytes }} a l'àmbit</span>
+    </div>
+    <div class="stat">
+      <strong>{{ summary.comparable - summary.files }}</strong>
+      <span>{% if view == 'compare' %}fitxers que sí que són a {{ to_drive }}{% else %}fitxers amb alguna còpia{% endif %}</span>
+    </div>
+    {% if mode == 'hash' %}
+    <div class="stat {% if summary.unverifiable %}stat-warn{% endif %}">
+      <strong>{{ summary.unverifiable }}</strong>
+      <span>no comprovables (sense hash)</span>
+      <span class="muted">{{ summary.unverifiable_bytes | format_bytes }} · calculeu-ne el hash per saber-ho</span>
+    </div>
+    {% endif %}
+    {% if summary.empty_files %}<div class="stat"><strong>{{ summary.empty_files }}</strong><span>fitxers de 0 bytes ignorats</span></div>{% endif %}
+  </div>
+  <p class="form-hint">Temps de càlcul: {{ '%.2f' | format(elapsed) }} s.</p>
+</section>
+
+<div class="copies-toolbar">
+  <nav class="changes-tabs copies-show" aria-label="Com mostrar-ho">
+    <a href="{{ url_folders }}" class="changes-tab{% if show == 'folders' %} active{% endif %}">Per carpetes</a>
+    <a href="{{ url_list }}" class="changes-tab{% if show == 'list' %} active{% endif %}">Llista de fitxers</a>
+  </nav>
+  <nav class="breadcrumbs copies-crumbs" aria-label="Carpeta dins l'àmbit">
+    <a href="{{ url_root_prefix }}">{{ drive }}{% if path %} › {{ path.replace('/', ' › ') }}{% endif %}</a>
+    {% for c in crumbs %}<span class="breadcrumbs-sep" aria-hidden="true">›</span>{% if loop.last %}<span aria-current="page">{{ c.name }}</span>{% else %}<a href="{{ c.url }}">{{ c.name }}</a>{% endif %}{% endfor %}
+  </nav>
+</div>
+
+{% if groups is not none %}
+  {% if groups %}
+  <div class="table-wrapper">
+    <table class="copies-table">
+      <thead><tr><th>Carpeta</th><th class="num">Fitxers {% if view == 'compare' %}que falten{% else %}sense còpia{% endif %}</th><th class="num">Mida</th><th></th></tr></thead>
+      <tbody>
+        {% for g in groups %}
+        <tr>
+          <td class="mono">
+            {% if g.is_direct %}<span class="muted">(fitxers directes de la carpeta)</span>
+            {% else %}<a href="{{ request.url.include_query_params(prefix=g.path, page=1) }}" title="Baixa a aquesta carpeta">{{ g.name }}</a>{% endif %}
+          </td>
+          <td class="num">{{ g.files }}</td>
+          <td class="num bytes">{{ g.bytes | format_bytes }}</td>
+          <td>
+            <a href="{{ request.url_for('explorador_route') }}?drive={{ drive | urlencode }}&amp;path={{ g.path | urlencode }}" title="Obre a l'explorador">explorador</a>
+            · <a href="{{ request.url.include_query_params(prefix=g.path, show='list', page=1) }}">llista</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>{% if view == 'compare' %}Tot el que hi ha aquí és també a {{ to_drive }}{% else %}Tots els fitxers comparables d'aquest àmbit tenen alguna còpia{% endif %}{% if mode == 'hash' and summary.unverifiable %} (dels que tenen hash){% endif %}.</p></div>
+  {% endif %}
+{% endif %}
+
+{% if rows is not none %}
+  {% if rows %}
+  <div class="table-wrapper">
+    <table class="copies-table">
+      <thead><tr><th>Carpeta</th><th>Fitxer</th><th class="num">Mida</th><th>Modificat</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="mono"><a href="{{ request.url_for('explorador_route') }}?drive={{ r.drive_id | urlencode }}&amp;path={{ r.folder | urlencode }}" title="Obre la carpeta a l'explorador">{{ r.folder.replace('/', '\\') or '(arrel)' }}</a></td>
+          <td class="mono">{% if r.hash_sha256 %}<a href="{{ request.url_for('duplicates_route') }}?group=hash&amp;hash={{ r.hash_sha256 }}" title="Còpies per contingut">{{ r.name }}</a>{% else %}<a href="{{ request.url_for('duplicates_route') }}?group=name-size&amp;name={{ r.name | urlencode }}&amp;size={{ r.size_bytes }}" title="Fitxers amb el mateix nom i mida">{{ r.name }}</a>{% endif %}</td>
+          <td class="num bytes">{{ r.size_bytes | format_bytes }}</td>
+          <td>{{ (r.modified_utc or '')[:19].replace('T', ' ') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if total_pages %}{% include "pagination.html" %}{% elif prev_url or next_url %}
+  <div class="pagination">{% if prev_url %}<a href="{{ prev_url }}">Anterior</a>{% else %}<span class="disabled">Anterior</span>{% endif %}<span class="current">Pàgina {{ page }}</span>{% if next_url %}<a href="{{ next_url }}">Següent</a>{% else %}<span class="disabled">Següent</span>{% endif %}</div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state"><p>Cap fitxer {% if view == 'compare' %}falta{% else %}és sense còpia{% endif %} en aquesta carpeta.</p></div>
+  {% endif %}
+{% endif %}
+{% endif %}
+
+{% if not submitted %}
+<div class="empty-state">
+  <p>Trieu un disc (o deixeu «tots els discs» per veure el resum) i premeu «Calcula».</p>
+  <p class="hint">Des de l'Explorador, el menú d'una carpeta també hi porta: «Còpies d'aquesta carpeta en altres discs».</p>
+</div>
+{% endif %}
+{% endblock %}

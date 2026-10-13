@@ -84,8 +84,11 @@ def parse_search_params(qp: Mapping[str, Any], getlist=None) -> dict[str, Any]:
     sort_folders = get("sort_folders").strip()
     dir_folders = (get("dir_folders").strip() or "asc").lower()
     tag_raw = get("tag_id").strip()
+    truthy = ("1", "true", "True", "on")
     return {
         "tag_id": int(tag_raw) if tag_raw.isdigit() and int(tag_raw) > 0 else None,
+        "only_single_copy": get("only_single_copy").strip() in truthy,
+        "only_duplicates": get("only_duplicates").strip() in truthy,
         "q_name": get("q_name").strip(),
         "q_path": get("q_path").strip(),
         "q": get("q").strip(),
@@ -125,7 +128,8 @@ def _file_terms(p: dict[str, Any]) -> tuple[list[str], list[str], list[str], boo
 def has_search_criteria(p: dict[str, Any]) -> bool:
     """True si la cerca té prou criteris per executar-se (termes vàlids o un àmbit de carpeta)."""
     name_terms, path_terms, flex_terms, _ = _file_terms(p)
-    return bool(name_terms or path_terms or flex_terms or p["in_drive"] or p.get("tag_id"))
+    return bool(name_terms or path_terms or flex_terms or p["in_drive"] or p.get("tag_id")
+                or p.get("only_single_copy") or p.get("only_duplicates"))
 
 
 def run_file_search(
@@ -157,6 +161,8 @@ def run_file_search(
         in_drive=p["in_drive"] or None,
         in_path=p["in_path"] or None,
         tag_id=p.get("tag_id"),
+        only_single_copy=bool(p.get("only_single_copy")),
+        only_duplicates=bool(p.get("only_duplicates")),
     )
 
 

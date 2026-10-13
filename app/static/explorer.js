@@ -83,6 +83,7 @@
   var searchUrl = root.getAttribute('data-search-url') || '/search';
   var duplicatesUrl = root.getAttribute('data-duplicates-url') || '/duplicates';
   var exportUrl = root.getAttribute('data-export-url') || '/api/explorer/export.csv';
+  var copiesUrl = root.getAttribute('data-copies-url') || '/copies';
 
   var state = {
     mode: 'folder',        // 'folder' | 'space' | 'tag'
@@ -671,6 +672,12 @@
     if (q.extension) parts.push('extensió ' + q.extension);
     if (q.min_size_mb) parts.push('≥ ' + q.min_size_mb + ' MB');
     if (q.exclude) parts.push('excloent «' + q.exclude + '»');
+    if (q.tag_id) {
+      var tg = state.tags.filter(function (t) { return t.tag_id === q.tag_id; })[0];
+      parts.push('etiqueta «' + (tg ? tg.name : q.tag_id) + '»');
+    }
+    if (q.only_single_copy) parts.push('només còpia única');
+    if (q.only_duplicates) parts.push('només duplicats');
     if (q.include_missing) parts.push('amb desapareguts');
     return parts.join(' · ') || 'tots els fitxers';
   }
@@ -683,6 +690,9 @@
     });
     if (q.drive_ids && q.drive_ids.length) p.drive_ids = q.drive_ids;
     if (q.include_missing) p.include_missing = 1;
+    if (q.tag_id) p.tag_id = q.tag_id;
+    if (q.only_single_copy) p.only_single_copy = 1;
+    if (q.only_duplicates) p.only_duplicates = 1;
     if (q.sort) { p.sort_f = q.sort; p.dir_f = q.dir || 'asc'; }
     p.search_type = 'files';
     p.submitted = 1;
@@ -972,6 +982,8 @@
       href: exportUrl + '?' + qs({ drive_id: drive, path: path, recursive: 0 }) });
     items.push({ label: 'Exporta a CSV (amb subcarpetes)', icon: 'i-download', download: true,
       href: exportUrl + '?' + qs({ drive_id: drive, path: path, recursive: 1 }) });
+    items.push({ label: 'Còpies d’aquesta carpeta en altres discs', icon: 'i-duplicates',
+      href: copiesUrl + '?' + qs({ view: 'unique', drive: drive, path: path, submitted: 1 }) });
     items.push({ sep: true });
     items.push({ label: 'Afegeix a una col·lecció o etiqueta…', icon: 'i-plus',
       action: function () { openAddDialog([{ kind: 'folder', drive: drive, path: path, name: opts && opts.name ? opts.name : (baseName(path) || drive) }]); } });

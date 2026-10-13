@@ -2855,6 +2855,68 @@ html.dark .explorer-table tbody tr.row-selected td {
   }
 }
 
+/* --- Pàgina Còpies --- */
+.copies-stats .stat strong {
+  font-size: 1.5rem;
+}
+
+.copies-stats .stat span {
+  display: block;
+}
+
+.copies-stats .stat-warn {
+  border-color: #ef6c00;
+}
+
+.copies-warn {
+  color: #c62828;
+  font-weight: 600;
+}
+
+html.dark .copies-warn {
+  color: #ef9a9a;
+}
+
+.copies-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.copies-toolbar .changes-tabs {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.copies-crumbs {
+  margin: 0;
+}
+
+.copies-crumbs a,
+.copies-table a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.copies-crumbs a:hover,
+.copies-table a:hover {
+  text-decoration: underline;
+}
+
+.copies-table td.num,
+.copies-table th.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.form-actions .btn-secondary {
+  margin-left: 0.5rem;
+}
+
 @media (max-width: 820px) {
   .explorer-menu {
     left: 8px !important;

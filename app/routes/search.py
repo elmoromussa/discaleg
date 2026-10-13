@@ -176,5 +176,7 @@ def search_page(
             "query_json": query_json,
             "tags": tags,
             "tag_id": p["tag_id"],
+            "only_single_copy": p["only_single_copy"],
+            "only_duplicates": p["only_duplicates"],
         },
     )

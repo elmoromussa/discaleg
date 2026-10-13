@@ -39,7 +39,7 @@
   <symbol id="i-folder-empty" viewBox="0 0 48 48"><path d="M5 14a4 4 0 0 1 4-4h10l5 5h15a4 4 0 0 1 4 4v18a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M17 29h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
 </svg>
 
-<div class="explorer" id="explorer" data-search-url="{{ request.url_for('search_route') }}" data-duplicates-url="{{ request.url_for('duplicates_route') }}" data-export-url="{{ request.url_for('explorer_export') }}">
+<div class="explorer" id="explorer" data-search-url="{{ request.url_for('search_route') }}" data-duplicates-url="{{ request.url_for('duplicates_route') }}" data-export-url="{{ request.url_for('explorer_export') }}" data-copies-url="{{ request.url_for('copies_route') }}">
   <aside class="explorer-sidebar" aria-label="Discs i carpetes">
     <div class="explorer-sidebar-head">
       <span class="explorer-sidebar-title">Discs</span>

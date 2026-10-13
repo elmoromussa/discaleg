@@ -39,6 +39,10 @@ Un **espai** agrupa fitxers de qualsevol disc sense moure'ls. La primera forma s
 
 La segona forma d'espai són les **col·leccions**: hi afegiu fitxers i carpetes a mà. A l'Explorador, seleccioneu files (clic, Ctrl+clic, Maj+clic, Ctrl+A) i trieu **Afegeix a…** al menú contextual (també per a la carpeta oberta): un diàleg deixa triar la col·lecció (o crear-ne una) i marcar **etiquetes** (o crear-ne). Els fitxers s'identifiquen pel **contingut** (hash SHA-256) quan en tenen, de manera que l'espai mostra totes les còpies presents a qualsevol disc i sobreviu a moure'ls; si encara no tenen hash s'identifiquen per disc i ruta, i el hash es completa sol quan es calcula. Les carpetes entren **senceres** com un sol element (prefix de ruta), mai fitxer a fitxer. La columna **Motiu** diu per què hi és cada fitxer, i el menú de la fila permet treure l'element de la col·lecció. Les etiquetes es veuen al node **Etiquetes** del panell Espais, i a **Cercar** hi ha el filtre «Només fitxers amb l'etiqueta», que també pot formar part d'una cerca desada.
 
+### Còpies: què està segur
+
+La pàgina **Còpies** respon dues preguntes. **Còpia única**: quins fitxers d'un disc (o d'una carpeta) no tenen cap còpia en cap altre disc (o enlloc, si marqueu que les còpies dins del mateix disc també compten); sense triar disc surt el resum dels vint. **Comparació**: «tot el que hi ha a A (o a una carpeta d'A) és també a B?», amb el que falta a B i un botó per invertir la direcció. El criteri fiable és el **contingut** (SHA-256): només compta els fitxers que ja tenen hash i mostra quants queden «no comprovables»; el criteri **nom i mida** serveix d'aproximació mentre no hi hagi hashes. Els resultats es veuen **per carpetes** (es pot baixar nivell a nivell, amb enllaç a l'explorador) o com a **llista** paginada. A **Cercar**, les opcions «Només fitxers amb còpia única» i «Només fitxers duplicats» apliquen el mateix criteri per contingut i es poden desar com a espai («fotos RAW sense cap còpia»). Des de l'Explorador, el menú d'una carpeta té «Còpies d'aquesta carpeta en altres discs».
+
 ### Fitxa del disc
 
 A cada targeta de **Discs**, **Edita la fitxa** desplega un formulari per indicar l'**etiqueta** (nom amb sentit per a tu), el **tipus** de suport (disc dur, SSD, NVMe, memòria USB, targeta SD, òptic, xarxa, altre), la **ubicació** física (on és guardat) i **notes** lliures. Aquestes dades es mostren a la targeta i al rètol del disc a l'Explorador. L'escaneig no les toca: només omple l'etiqueta amb la del volum si encara és buida.
@@ -61,6 +65,7 @@ El càlcul del SHA-256 per fitxer es fa amb `python tools/hash_files.py` (vegeu 
 | **Extensions** | Estadístiques per extensió (paginat). |
 | **Carpetes** | Llistat de carpetes per mida (paginat). |
 | **Explorador** | Arbre de carpetes i fitxers des de la DB (sense accés al sistema de fitxers) i panell d'espais virtuals (cerques desades). Clic dret, botó ⋯ o Maj+F10 sobre un element: cerca dins la carpeta, exportació a CSV, còpies d'un fitxer, copiar la ruta. |
+| **Còpies** | Fitxers amb còpia única (per disc o carpeta, amb resum de tots els discs) i comparació «tot el que hi ha a A és també a B?». Per contingut (hash) o, mentre no n'hi hagi, per nom i mida. |
 | **Discs** | Auditar i incorporar o actualitzar discs; fitxa de cada disc (etiqueta, tipus, ubicació, notes); vista «Canvis» per escaneig. |
 
 ## Notes

@@ -14,10 +14,11 @@ DiscScope/
 │   ├── queries.py        # Consultes SQL (dashboard, cerca, duplicats, extensions, folders)
 │   ├── queries_explorer.py # Consultes per a l'explorador simulat (arbre i contingut des de inventory)
 │   ├── queries_spaces.py # Espais virtuals: arbre jeràrquic, CRUD, contingut de les cerques desades
+│   ├── queries_copies.py # Informes de còpies: còpia única i comparació entre discs (hash o nom+mida)
 │   ├── search_params.py  # Paràmetres de cerca normalitzats i execució (Cercar i espais intel·ligents)
 │   ├── audit_to_db.py    # Esquema + audit directe a DB (sense CSV intermedis)
 │   ├── routes/
-│   │   ├── dashboard.py, search.py, duplicates.py, extensions.py, folders.py, explorer.py, discs.py, spaces.py
+│   │   ├── dashboard.py, search.py, duplicates.py, extensions.py, folders.py, explorer.py, discs.py, spaces.py, copies.py
 │   │   └── ...
 │   ├── templates/       # Jinja2 (base.html, dashboard, search, discs, welcome, ...)
 │   └── static/           # style.css, app.js (tema), explorer.js (explorador)
@@ -74,6 +75,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 | `POST /api/spaces/{id}/items`, `DELETE /api/spaces/{id}/items/{item_id}` | Col·leccions manuals: afegir elements `{kind: file|folder, drive_id, path}` (alta a `items`: fitxers amb nom, mida i hash d'inventory; carpetes amb el rang de prefix) i treure'n |
 | `/api/tags`, `PATCH`/`DELETE /api/tags/{id}`, `/api/tags/{id}/contents`, `POST /api/items/tag`, `POST /api/items/untag`, `/api/items/tags` | Etiquetes sobre fitxers i carpetes (mateixa identitat que les col·leccions) i el seu contingut resolt |
 | `POST /spaces/desa` | Formulari «Desa com a espai» de Cercar: crea (o actualitza, amb `space_id`) una cerca desada i redirigeix a `/explorador?space=ID` |
+| `/copies` | Còpies: `view=unique` (fitxers d'un disc o carpeta sense cap còpia en un altre disc, o enlloc amb `scope=any`; sense disc, resum dels 20) i `view=compare` («tot el que hi ha a A és també a B?», amb carpeta opcional d'A). Criteri `mode=hash` (contingut; els fitxers sense hash queden com a «no comprovables») o `mode=name-size` (aproximat). Resultats per carpeta (`show=folders`, amb `prefix=` per baixar) o en llista paginada |
 | `/discs` | Gestió de discs: auditar i incorporar, actualitzar o eliminar un disc, i editar-ne la fitxa (etiqueta, tipus, ubicació, notes; `POST /discs/fitxa`) |
 | `/discs/{drive_id}/canvis` | Què ha canviat en cada escaneig del disc: pestanyes de fitxers nous, modificats (mida i data abans/després) i desapareguts, paginades, des de `scan_changes`; `?scan=&tipus=new|changed|missing&page=` |
 | `/health` | JSON: database_exists, database_path |
@@ -96,6 +98,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/search_params.py:** `parse_search_params` normalitza els paràmetres de cerca en un diccionari pla i serialitzable (el `query_json` de les cerques desades), `run_file_search` / `run_folder_search` els executen. Ho fan servir la pàgina Cercar i els espais intel·ligents.
 - **app/queries_spaces.py:** espais virtuals: `list_spaces`/`build_tree`/`flatten_tree`, `create_space`, `update_space` (valida pare i cicles), `delete_space` (CTE recursiu: descendents i pertinences, sense dependre de les claus foranes), `get_smart_contents` (executa la cerca desada amb ordenació i paginació), `upsert_items`/`add_members`/`remove_member`, etiquetes (`create_tag`, `tag_items`, `untag_items`, `tags_of`), `refresh_item_hashes` (completa el hash dels elements quan arriba) i `get_manual_contents`/`get_tag_contents` sobre `queries.items_resolution_sql`: UNION de tres branques indexades (hash → totes les còpies presents a qualsevol disc; disc+ruta per als fitxers sense hash, també si han desaparegut; rang de prefix per a les carpetes), agrupada per fitxer amb el motiu.
 - **app/routes/spaces.py:** API JSON dels espais i formulari «Desa com a espai».
+- **app/queries_copies.py:** anti-join `NOT EXISTS` sobre els fitxers de l'àmbit (disc o carpeta): exterior per `idx_inventory_drive_hash` (hash) o per disc (nom+mida), sonda per `idx_inventory_hash_size` o `idx_inventory_name_size`; fitxers de 0 bytes ignorats; agrupació pel component de ruta següent; memòria cau en procés dels resums i agrupacions invalidada per `drives.updated_utc`. La cerca (`search_inventory`) accepta `only_single_copy` i `only_duplicates` amb la mateixa condició, utilitzables a les cerques desades.
 - **app/routes/discs.py:** Pàgina Discs (GET sense DB opcional per llista; POST escaneig en segon pla; `discs_card_post` desa la fitxa del disc; `scan_changes_page` mostra els canvis per escaneig). L'escaneig només omple l'etiqueta del disc si és buida: la que escriu l'usuari a la fitxa es conserva.
 
 ## Comportament sense DB

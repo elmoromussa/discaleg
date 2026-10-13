@@ -118,6 +118,18 @@
         </div>
         {% endif %}
         <div class="form-group">
+          <span class="label">Per contingut (només fitxers amb hash SHA-256)</span>
+          <label class="checkbox-label">
+            <input type="checkbox" name="only_single_copy" value="1" {% if only_single_copy %}checked{% endif %}>
+            Només fitxers amb còpia única (cap altre disc en té el mateix contingut)
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" name="only_duplicates" value="1" {% if only_duplicates %}checked{% endif %}>
+            Només fitxers duplicats (el mateix contingut existeix en algun altre lloc)
+          </label>
+          <p class="form-hint">Útils com a criteri d'una cerca desada: «fotos RAW sense cap còpia». Vegeu també la pàgina <a href="{{ request.url_for('copies_route') }}">Còpies</a>.</p>
+        </div>
+        <div class="form-group">
           <label class="checkbox-label">
             <input type="checkbox" name="include_missing" value="1" {% if include_missing %}checked{% endif %}>
             Incloure fitxers desapareguts (no presents a l'últim escaneig del disc)

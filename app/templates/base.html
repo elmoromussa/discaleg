@@ -17,6 +17,7 @@
             <li><a href="{{ request.url_for('index') }}" class="{% if request.url.path == '/' %}active{% endif %}">Inici</a></li>
             <li><a href="{{ request.url_for('search_route') }}" class="{% if request.url.path == '/search' %}active{% endif %}">Cercar</a></li>
             <li><a href="{{ request.url_for('duplicates_route') }}" class="{% if request.url.path == '/duplicates' %}active{% endif %}">Duplicats</a></li>
+            <li><a href="{{ request.url_for('copies_route') }}" class="{% if request.url.path == '/copies' %}active{% endif %}">Còpies</a></li>
             <li><a href="{{ request.url_for('extensions_route') }}" class="{% if request.url.path == '/extensions' %}active{% endif %}">Extensions</a></li>
             <li><a href="{{ request.url_for('folders_route') }}" class="{% if request.url.path == '/folders' %}active{% endif %}">Carpetes</a></li>
             <li><a href="{{ request.url_for('explorador_route') }}" class="{% if request.url.path == '/explorador' %}active{% endif %}">Explorador</a></li>

@@ -112,6 +112,13 @@ def explorador_route(request: Request, conn: sqlite3.Connection = Depends(get_db
     return explorer.explorer_page(request, templates, conn)
 
 
+@app.get("/copies")
+def copies_route(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Informes de còpies: còpia única per disc i comparació entre discs."""
+    from app.routes import copies
+    return copies.copies_page(request, templates, conn)
+
+
 @app.get("/api/explorer/roots")
 def api_explorer_roots(conn: sqlite3.Connection = Depends(get_db)):
     """Retorna els discs (arrels de l'arbre) amb la fitxa resumida."""

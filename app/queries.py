@@ -268,6 +268,8 @@ def _build_search_inventory_where(
     in_drive: str | None = None,
     in_path_db: str | None = None,
     tag_id: int | None = None,
+    only_single_copy: bool = False,
+    only_duplicates: bool = False,
 ) -> tuple[str, list]:
     """Construïx WHERE per search_inventory.
     - flex_like_terms: cada terme (name OR relative_path), tots amb AND (mode «nom o ruta»).
@@ -291,10 +293,23 @@ def _build_search_inventory_where(
                 "(" + " AND ".join(["relative_path LIKE ?"] * len(path_like_terms)) + ")"
             )
             params.extend(path_like_terms)
-    elif not in_drive and tag_id is None:
+    elif not in_drive and tag_id is None and not (only_single_copy or only_duplicates):
         main_parts.append("1 = 0")
 
     conditions = [" AND ".join(main_parts)] if main_parts else []
+    # criteris per contingut (només fitxers amb hash i mida > 0; sonda per idx_inventory_hash_size)
+    if only_single_copy:
+        conditions.append(
+            "hash_sha256 IS NOT NULL AND size_bytes > 0 AND NOT EXISTS (SELECT 1 FROM inventory b "
+            "WHERE b.hash_sha256 = inventory.hash_sha256 AND b.drive_id <> inventory.drive_id "
+            "AND b.missing_since_utc IS NULL)"
+        )
+    if only_duplicates:
+        conditions.append(
+            "hash_sha256 IS NOT NULL AND size_bytes > 0 AND EXISTS (SELECT 1 FROM inventory b "
+            "WHERE b.hash_sha256 = inventory.hash_sha256 AND b.id <> inventory.id "
+            "AND b.missing_since_utc IS NULL)"
+        )
     if tag_id is not None:
         # fitxers etiquetats (resolts per hash, ruta o carpeta); va primer: la llista és petita
         conditions.insert(0, f"id IN (SELECT id FROM ({items_resolution_sql(TAG_ITEMS_SQL)}))")
@@ -352,6 +367,8 @@ def search_inventory(
     in_drive: str | None = None,
     in_path: str | None = None,
     tag_id: int | None = None,
+    only_single_copy: bool = False,
+    only_duplicates: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """Cerca a inventory. Mode flex: cada terme en (name OR path), AND entre termes.
     Mode eixos: name_terms i path_terms es combinen amb AND (llistes buides = sense filtre en aquell eix).
@@ -372,7 +389,8 @@ def search_inventory(
         like_path: list[str] = []
     else:
         like_flex = []
-        if not name_terms and not path_terms and not in_drive and tag_id is None:
+        if (not name_terms and not path_terms and not in_drive and tag_id is None
+                and not (only_single_copy or only_duplicates)):
             return [], 0
         like_name = [_search_term_to_like_pattern(t) for t in name_terms]
         like_path = [_search_term_to_like_pattern(t) for t in path_terms]
@@ -395,6 +413,8 @@ def search_inventory(
         in_drive,
         in_path_db,
         tag_id,
+        only_single_copy,
+        only_duplicates,
     )
     params_count = list(params)
     if sort_by and sort_by in SEARCH_INVENTORY_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):
