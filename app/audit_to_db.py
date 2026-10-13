@@ -58,6 +58,7 @@ class ScanResult:
     files_missing: int
     seconds: float
     errors_count: int = 0
+    excludes_count: int = 0
 
     def message(self) -> str:
         n = _fmt_int
@@ -66,6 +67,9 @@ class ScanResult:
         if self.mode == "update":
             base += (f" (nous {n(self.files_new)}, modificats {n(self.files_changed)}, "
                      f"desapareguts {n(self.files_missing)})")
+        if self.excludes_count:
+            base += (f". {self.excludes_count} exclusi{'ó' if self.excludes_count == 1 else 'ons'} "
+                     f"aplicad{'a' if self.excludes_count == 1 else 'es'} (inventari parcial)")
         if self.errors_count:
             base += (f". {n(self.errors_count)} carpetes o fitxers no s'han pogut llegir "
                      f"(vegeu «Errors» a la fitxa del disc)")
@@ -191,7 +195,12 @@ def _extension(name: str) -> str:
     return NO_EXT
 
 
-def _walk(root: str, progress: ProgressFn | None, on_error: ErrorFn | None = None):
+def _walk(
+    root: str,
+    progress: ProgressFn | None,
+    on_error: ErrorFn | None = None,
+    excludes: frozenset[str] = frozenset(),
+):
     """Itera (rel_dir, name, size, mtime, birthtime, attributes) per a tots els fitxers
     regulars sota root. birthtime (st_birthtime) i attributes (st_file_attributes) són None
     si el sistema no els dona; a Windows venen amb el llistat, sense cap crida extra.
@@ -200,6 +209,9 @@ def _walk(root: str, progress: ProgressFn | None, on_error: ErrorFn | None = Non
     folder_stats contingui totes les carpetes. Iteratiu (sense recursió), no segueix
     enllaços simbòlics ni junctions, i continua si un directori o una entrada no es pot
     llegir: ho comunica a on_error (fase 'scandir' o 'entry') i segueix.
+
+    excludes: rutes relatives en majúscules (carpetes o fitxers) que no es recorren ni
+    s'emeten, a qualsevol profunditat. Buit (el cas habitual) només costa un `if` per entrada.
     """
     sep = os.sep
     stack: list[tuple[str, str]] = [(root, "")]
@@ -221,8 +233,13 @@ def _walk(root: str, progress: ProgressFn | None, on_error: ErrorFn | None = Non
                     if entry.is_dir(follow_symlinks=False):
                         if not rel_dir and entry.name.upper() in EXCLUDE_ROOT_DIRS:
                             continue
-                        stack.append((entry.path, (rel_dir + sep + entry.name) if rel_dir else entry.name))
+                        rel_child = (rel_dir + sep + entry.name) if rel_dir else entry.name
+                        if excludes and rel_child.upper() in excludes:
+                            continue  # carpeta exclosa: ni fitxers ni folder_stats
+                        stack.append((entry.path, rel_child))
                         continue
+                    if excludes and ((rel_dir + sep + entry.name) if rel_dir else entry.name).upper() in excludes:
+                        continue  # fitxer exclòs
                     st = entry.stat(follow_symlinks=False)
                 except OSError as e:
                     if on_error:
@@ -245,11 +262,17 @@ def scan_drive(
     progress: ProgressFn | None = None,
     notes: str | None = None,
     force_volume: bool = False,
+    exclude_paths: list[str] | None = None,
 ) -> ScanResult:
     """Escaneja root_path i fusiona el resultat a la DB sota drive_id.
 
     Si el disc ja té un volume_serial registrat i no coincideix amb el del volum muntat
     a root_path, s'atura (probable disc equivocat) llevat que force_volume sigui True.
+
+    exclude_paths: rutes relatives a l'arrel que no s'escanegen (vegeu normalize_exclude).
+    None = la llista desada a drives.exclude_paths; una llista = s'aplica i es desa a la
+    fitxa. La llista aplicada queda sempre a scans.exclude_paths. En mode update, el que
+    ja era a l'inventari sota una exclusió passa a «desaparegut».
     """
     import time
 
@@ -275,9 +298,14 @@ def scan_drive(
     hw = get_physical_disk_info(Path(root))  # tot None si no es pot (no Windows, UNC, error)
     hw_serial = identity_serial(hw)  # None si la sèrie és buida o genèrica (carcasses USB)
     prev = conn.execute(
-        "SELECT volume_serial, last_root_path, serial_number FROM drives WHERE drive_id = ?",
+        "SELECT volume_serial, last_root_path, serial_number, exclude_paths FROM drives "
+        "WHERE drive_id = ?",
         (drive_id,),
     ).fetchone()
+    if exclude_paths is None:
+        exclude_paths = load_excludes(prev[3]) if prev else []
+    exclude_paths = merge_excludes([normalize_exclude(p, root) for p in exclude_paths])
+    excludes_upper = frozenset(p.upper() for p in exclude_paths)
     if (prev and prev[0] and vol["volume_serial"] and prev[0] != vol["volume_serial"]
             and not force_volume):
         raise RuntimeError(
@@ -316,6 +344,7 @@ def scan_drive(
                physical_size_bytes = COALESCE(?, physical_size_bytes),
                free_bytes = COALESCE(?, free_bytes),
                health_status = COALESCE(?, health_status),
+               exclude_paths = ?,
                updated_utc = ?
         WHERE drive_id = ?
         """,
@@ -327,6 +356,7 @@ def scan_drive(
          override, hw["interface"], hw["interface"],
          suggest_kind(hw),
          vol["capacity_bytes"], hw["physical_size_bytes"], vol["free_bytes"], hw["health_status"],
+         dump_excludes(exclude_paths) if exclude_paths else None,
          now, drive_id),
     )
     # escaneigs anteriors d'aquest disc que van quedar «running» (procés tallat): tancar-los
@@ -338,11 +368,13 @@ def scan_drive(
     cur = conn.execute(
         """
         INSERT INTO scans (drive_id, root_path, mode, started_utc, status, tool_version, notes,
-                           serial_number, model, interface, free_bytes, health_status)
-        VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
+                           serial_number, model, interface, free_bytes, health_status,
+                           exclude_paths)
+        VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (drive_id, root, mode, now, TOOL_VERSION, notes,
-         hw["serial_number"], hw["model"], hw["interface"], vol["free_bytes"], hw["health_status"]),
+         hw["serial_number"], hw["model"], hw["interface"], vol["free_bytes"], hw["health_status"],
+         dump_excludes(exclude_paths)),
     )
     scan_id = int(cur.lastrowid)
     conn.commit()
@@ -378,7 +410,8 @@ def scan_drive(
         errors.append((phase, rel, error_code(e), error_text(e)))
 
     try:
-        for rel_dir, name, size, mtime, btime, attrs in _walk(long_path(root), progress, on_error):
+        for rel_dir, name, size, mtime, btime, attrs in _walk(long_path(root), progress, on_error,
+                                                              excludes_upper):
             if name is None:
                 folder_agg[rel_dir]  # registra la carpeta encara que no tingui fitxers
                 continue
@@ -593,7 +626,7 @@ def scan_drive(
         scan_id=scan_id, drive_id=drive_id, mode=mode, files_count=files_count,
         total_bytes=total_bytes, folders_count=len(folder_agg), extensions_count=len(ext_stats),
         files_new=files_new, files_changed=files_changed, files_missing=files_missing,
-        seconds=time.time() - t0, errors_count=len(errors),
+        seconds=time.time() - t0, errors_count=len(errors), excludes_count=len(exclude_paths),
     )
 
 
