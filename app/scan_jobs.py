@@ -31,8 +31,13 @@ def _set(**fields: Any) -> None:
             _current.update(fields)
 
 
-def start_scan(db_path: Path, root_path: Path, drive_id: str, mode: str) -> dict[str, Any]:
-    """Arrenca l'escaneig en un fil. Llança RuntimeError si ja n'hi ha un en curs."""
+def start_scan(
+    db_path: Path, root_path: Path, drive_id: str, mode: str,
+    exclude_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    """Arrenca l'escaneig en un fil. Llança RuntimeError si ja n'hi ha un en curs.
+
+    exclude_paths: llista normalitzada que s'aplica i es desa a la fitxa; None = la desada."""
     global _current
     with _lock:
         if _current and _current["status"] == "running":
@@ -68,7 +73,7 @@ def start_scan(db_path: Path, root_path: Path, drive_id: str, mode: str) -> dict
 
             result = scan_drive(
                 conn, root_path, drive_id, mode=mode, progress=progress_phase,
-                force_volume=(mode == "replace"),
+                force_volume=(mode == "replace"), exclude_paths=exclude_paths,
             )
             _set(status="done", message=result.message(), files_seen=result.files_count,
                  phase="acabat", finished_utc=utc_now_iso(), seconds=round(result.seconds))

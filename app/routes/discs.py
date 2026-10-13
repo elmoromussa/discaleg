@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app import queries, scan_jobs, schema
-from app.audit_to_db import delete_drive
+from app.audit_to_db import delete_drive, load_excludes, parse_exclude_lines
 from app.config import database_path
 
 # Longitud màxima del missatge d'error mostrat a la plantilla (evitar HTML massa llarg)
@@ -48,6 +48,8 @@ def discs_page_get(
                     )
                 else:
                     drives = queries.get_drives_summary(conn)
+                    for d in drives:
+                        d["excludes"] = load_excludes(d.get("exclude_paths"))
                     scans = queries.get_recent_scans(conn, limit=10)
                     error_counts = queries.get_read_error_counts(conn)
             finally:
@@ -263,6 +265,16 @@ async def discs_card_post(request: Request) -> RedirectResponse:
             return RedirectResponse(
                 url="/discs?error=" + quote(f"Tipus de disc desconegut: {kind}"), status_code=302
             )
+        raw_excludes = form.get("exclude_paths")
+        exclude_paths: list[str] | None = None
+        if raw_excludes is not None:  # camp present: la llista del formulari substitueix la desada
+            try:
+                exclude_paths = parse_exclude_lines(str(raw_excludes))
+            except ValueError as e:
+                return RedirectResponse(
+                    url="/discs?error=" + quote(f"Exclusions de «{drive_id}»: {e}") + "#disc-" + quote(drive_id),
+                    status_code=302,
+                )
         conn = sqlite3.connect(str(database_path), timeout=30.0)
         try:
             found = queries.update_drive_card(
@@ -272,6 +284,7 @@ async def discs_card_post(request: Request) -> RedirectResponse:
                 kind=kind,
                 location=_clean_field(form.get("location"), "location"),
                 notes=_clean_field(form.get("notes"), "notes"),
+                exclude_paths=exclude_paths,
             )
         finally:
             conn.close()
@@ -326,9 +339,18 @@ async def discs_page_post(request: Request, templates: Jinja2Templates) -> HTMLR
                 "La ruta de la carpeta o disc a escanejar no existeix o no és un directori."
             )
 
+        # Exclusions del formulari: buit = fer servir (i conservar) la llista desada a la fitxa
+        exclude_paths: list[str] | None = None
+        raw_excludes = (form.get("exclude_paths") or "").strip()
+        if raw_excludes:
+            try:
+                exclude_paths = parse_exclude_lines(raw_excludes, str(root_path))
+            except ValueError as e:
+                return _error_html_response(f"Exclusions: {e}")
+
         database_path.parent.mkdir(parents=True, exist_ok=True)
         # L'escaneig s'executa en segon pla; la pàgina Discs mostra el progrés (/api/scan/status)
-        scan_jobs.start_scan(database_path, root_path, drive_id, mode)
+        scan_jobs.start_scan(database_path, root_path, drive_id, mode, exclude_paths=exclude_paths)
         return RedirectResponse(url="/discs", status_code=302)
     except Exception as e:
         logging.exception("Error en POST /discs (escaneig)")

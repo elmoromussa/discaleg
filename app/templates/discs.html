@@ -50,6 +50,12 @@
              placeholder="EXT-A, HDD1, ..." style="max-width: 20em;">
     </div>
     <div class="form-group">
+      <label for="exclude_paths" class="form-label">Exclusions (opcional, una ruta per línia)</label>
+      <textarea id="exclude_paths" name="exclude_paths" class="form-control" rows="3" style="max-width: 40em;"
+                placeholder="Windows&#10;Users\elmor\AppData&#10;pagefile.sys" spellcheck="false"></textarea>
+      <p class="form-hint">Carpetes (amb tot el que pengen) o fitxers, relatius a l'arrel, sense comodins ni distinció de majúscules. Es desen a la fitxa del disc i s'apliquen a cada escaneig; el disc quedarà marcat com a <strong>inventari parcial</strong>. Si el deixeu buit, s'aplica la llista ja desada per a aquest identificador.</p>
+    </div>
+    <div class="form-group">
       <label class="checkbox-label">
         <input type="checkbox" name="replace" value="on">
         Reiniciar el disc (esborra l'inventari i els hashes d'aquest drive_id)
@@ -71,6 +77,7 @@
       <div class="stat-disc-head">
         <strong>{{ d.drive_id }}</strong>
         {% if d.kind %}<span class="disc-kind" title="Tipus de suport">{{ drive_kinds.get(d.kind, d.kind) }}</span>{% endif %}
+        {% if d.excludes %}<span class="disc-kind disc-partial" title="L'inventari d'aquest disc no inclou les rutes excloses">Inventari parcial · {{ d.excludes | length }} exclusi{{ 'ó' if d.excludes | length == 1 else 'ons' }}</span>{% endif %}
       </div>
       <dl class="disc-card">
         <div><dt>Etiqueta</dt><dd>{% if d.label %}{{ d.label }}{% else %}<span class="disc-empty">—</span>{% endif %}</dd></div>
@@ -83,6 +90,7 @@
         {% if d.model or d.serial_number or d.interface %}<div><dt>Maquinari</dt><dd title="Model · bus · número de sèrie del disc físic"><span class="mono">{{ [d.vendor, d.model, d.interface, d.serial_number] | select | join(' · ') }}</span>{% if d.physical_size_bytes %} <span class="bytes">({{ d.physical_size_bytes | int | format_bytes }})</span>{% endif %}</dd></div>{% endif %}
         {% if d.free_bytes is not none %}<div><dt>Lliure</dt><dd title="Espai lliure del volum a l'últim escaneig"><span class="bytes">{{ d.free_bytes | int | format_bytes }}</span>{% if d.capacity_bytes %} · {{ '%.0f' | format(100.0 * d.free_bytes / d.capacity_bytes) }} %{% endif %}</dd></div>{% endif %}
         {% if d.health_status and d.health_status != 'Healthy' %}<div><dt>Salut</dt><dd><span class="disc-health-warn" title="Estat segons Windows (Get-Disk)">{{ d.health_status }}</span></dd></div>{% endif %}
+        {% if d.excludes %}<div><dt>Exclusions</dt><dd class="disc-excludes" title="Rutes relatives a l'arrel que l'escaneig no recorre"><span class="mono">{{ d.excludes | join(' · ') }}</span></dd></div>{% endif %}
         {% if error_counts.get(d.drive_id) %}<div><dt>Errors</dt><dd><a class="disc-health-warn" href="{{ request.url_for('read_errors_route', drive_id=d.drive_id) }}" title="Carpetes i fitxers que no s'han pogut llegir">{{ error_counts[d.drive_id] }} de lectura</a></dd></div>{% endif %}
       </dl>
       <details class="disc-edit">
@@ -105,6 +113,9 @@
           </label>
           <label>Notes
             <textarea name="notes" rows="3" maxlength="4000" placeholder="Opcional">{{ d.notes or '' }}</textarea>
+          </label>
+          <label>Exclusions (una ruta per línia, relativa a l'arrel; s'apliquen al proper escaneig)
+            <textarea name="exclude_paths" rows="3" placeholder="Windows&#10;Users\elmor\AppData&#10;pagefile.sys" spellcheck="false">{{ d.excludes | join('\n') }}</textarea>
           </label>
           <div class="disc-edit-actions">
             <button type="submit" class="btn btn-primary btn-sm">Desa la fitxa</button>

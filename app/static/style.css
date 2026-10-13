@@ -376,9 +376,14 @@ h2 {
 
 .stat-disc-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.3rem 0.5rem;
+}
+
+.stat-disc-head strong {
+  margin-right: auto;
 }
 
 .stats-grid .stat-disc-head strong {
@@ -442,6 +447,24 @@ h2 {
 .disc-health-warn {
   color: #b71c1c;
   font-weight: 600;
+}
+
+/* Disc amb exclusions: l'inventari és parcial i s'ha de veure d'un cop d'ull */
+.disc-partial {
+  color: #ef6c00;
+  border-color: #ef6c00;
+  font-weight: 600;
+  white-space: normal;
+}
+
+html.dark .disc-partial {
+  color: #ffb74d;
+  border-color: #ffb74d;
+}
+
+.disc-excludes {
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
 }
 
 html.dark .disc-health-warn {
