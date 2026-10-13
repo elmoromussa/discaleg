@@ -120,7 +120,9 @@ def _extension(name: str) -> str:
 
 
 def _walk(root: str, progress: ProgressFn | None, on_error: ErrorFn | None = None):
-    """Itera (rel_dir, name, size, mtime) per a tots els fitxers regulars sota root.
+    """Itera (rel_dir, name, size, mtime, birthtime, attributes) per a tots els fitxers
+    regulars sota root. birthtime (st_birthtime) i attributes (st_file_attributes) són None
+    si el sistema no els dona; a Windows venen amb el llistat, sense cap crida extra.
 
     Per a cada directori (també els buits) emet abans una entrada amb name=None, perquè
     folder_stats contingui totes les carpetes. Iteratiu (sense recursió), no segueix
@@ -138,7 +140,7 @@ def _walk(root: str, progress: ProgressFn | None, on_error: ErrorFn | None = Non
             if on_error:
                 on_error("scandir", rel_dir, e)
             continue
-        yield rel_dir, None, 0, 0.0
+        yield rel_dir, None, 0, 0.0, None, None
         with it:
             for entry in it:
                 try:
@@ -159,7 +161,8 @@ def _walk(root: str, progress: ProgressFn | None, on_error: ErrorFn | None = Non
                 count += 1
                 if progress and count % 5000 == 0:
                     progress(count, rel_dir)
-                yield rel_dir, entry.name, st.st_size, st.st_mtime
+                yield (rel_dir, entry.name, st.st_size, st.st_mtime,
+                       getattr(st, "st_birthtime", None), getattr(st, "st_file_attributes", None))
 
 
 def scan_drive(
@@ -279,7 +282,8 @@ def scan_drive(
         CREATE TEMP TABLE scan_files (
             relative_path TEXT PRIMARY KEY,
             name TEXT NOT NULL, extension TEXT NOT NULL,
-            size_bytes INTEGER NOT NULL, modified_utc TEXT
+            size_bytes INTEGER NOT NULL, modified_utc TEXT,
+            created_utc TEXT, attributes INTEGER
         ) WITHOUT ROWID
         """
     )
@@ -294,7 +298,7 @@ def scan_drive(
     def flush() -> None:
         if chunk:
             conn.executemany(
-                "INSERT OR REPLACE INTO temp.scan_files VALUES (?, ?, ?, ?, ?)", chunk
+                "INSERT OR REPLACE INTO temp.scan_files VALUES (?, ?, ?, ?, ?, ?, ?)", chunk
             )
             chunk.clear()
 
@@ -302,13 +306,14 @@ def scan_drive(
         errors.append((phase, rel, error_code(e), error_text(e)))
 
     try:
-        for rel_dir, name, size, mtime in _walk(long_path(root), progress, on_error):
+        for rel_dir, name, size, mtime, btime, attrs in _walk(long_path(root), progress, on_error):
             if name is None:
                 folder_agg[rel_dir]  # registra la carpeta encara que no tingui fitxers
                 continue
             rel = (rel_dir + sep + name) if rel_dir else name
             ext = _extension(name)
-            chunk.append((rel, name, ext, size, _utc_iso(mtime)))
+            chunk.append((rel, name, ext, size, _utc_iso(mtime),
+                          _utc_iso(btime) if btime is not None else None, attrs))
             files_count += 1
             total_bytes += size
             e = ext_stats[ext]; e[0] += 1; e[1] += size
@@ -365,8 +370,10 @@ def scan_drive(
             cur = conn.execute(
                 """
                 INSERT INTO inventory (drive_id, relative_path, name, extension, size_bytes,
-                                       modified_utc, first_seen_scan, last_seen_scan)
-                SELECT ?, relative_path, name, extension, size_bytes, modified_utc, ?, ?
+                                       modified_utc, created_utc, attributes,
+                                       first_seen_scan, last_seen_scan)
+                SELECT ?, relative_path, name, extension, size_bytes, modified_utc,
+                       created_utc, attributes, ?, ?
                 FROM temp.scan_files
                 """,
                 (drive_id, scan_id, scan_id),
@@ -413,7 +420,8 @@ def scan_drive(
                 (scan_id, drive_id),
             )
             files_changed = cur.rowcount
-            # c) existents: actualitzar metadades; conservar hash si mida+data iguals
+            # c) existents: actualitzar metadades; conservar hash si mida+data iguals.
+            #    created_utc i attributes s'omplen sempre: no són criteri de canvi.
             conn.execute(
                 """
                 UPDATE inventory SET
@@ -430,6 +438,7 @@ def scan_drive(
                                            AND substr(inventory.modified_utc, 1, 19) IS substr(s.modified_utc, 1, 19)
                                           THEN inventory.hash_mtime_utc END,
                     size_bytes = s.size_bytes, modified_utc = s.modified_utc,
+                    created_utc = s.created_utc, attributes = s.attributes,
                     last_seen_scan = ?, missing_since_utc = NULL
                 FROM temp.scan_files s
                 WHERE inventory.drive_id = ? AND inventory.relative_path = s.relative_path
@@ -452,8 +461,10 @@ def scan_drive(
             conn.execute(
                 """
                 INSERT INTO inventory (drive_id, relative_path, name, extension, size_bytes,
-                                       modified_utc, first_seen_scan, last_seen_scan)
-                SELECT ?, s.relative_path, s.name, s.extension, s.size_bytes, s.modified_utc, ?, ?
+                                       modified_utc, created_utc, attributes,
+                                       first_seen_scan, last_seen_scan)
+                SELECT ?, s.relative_path, s.name, s.extension, s.size_bytes, s.modified_utc,
+                       s.created_utc, s.attributes, ?, ?
                 FROM temp.scan_files s
                 WHERE NOT EXISTS (SELECT 1 FROM inventory i
                                   WHERE i.drive_id = ? AND i.relative_path = s.relative_path)

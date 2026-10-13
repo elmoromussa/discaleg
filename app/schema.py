@@ -61,6 +61,14 @@ SHA256_EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 # Nom de la taula FTS5 (consultada des de queries.py)
 FTS_TABLE = "inventory_fts"
 
+# Atributs de Windows (inventory.attributes) d'un fitxer que només és al núvol (OneDrive i
+# similars, «fitxers sota demanda»): llegir-lo en força la descàrrega. El hash els salta.
+FILE_ATTRIBUTE_OFFLINE = 0x1000
+FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x40000
+FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x400000
+FILE_ATTR_CLOUD_MASK = (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN
+                        | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+
 # Fases en què es pot registrar un error de lectura (read_errors.phase) i la seva etiqueta.
 READ_ERROR_PHASES: dict[str, str] = {
     "scandir": "Carpeta il·legible",

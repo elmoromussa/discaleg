@@ -17,8 +17,11 @@ Opcions de rendiment:
   --workers N         fils en paral·lel (1 per a HDD; 4–8 per a SSD/NVMe)
   --only-size-dupes   només fitxers amb una mida repetida a tota la DB (candidats a duplicat)
   --min-size BYTES    ignora fitxers més petits
-Seguretat: si drives.volume_serial és conegut i no coincideix amb el volum muntat a
---root, s'atura (evita hashejar el disc equivocat); --force ho omet.
+  --include-cloud     també els fitxers que només són al núvol (OneDrive «sota demanda»):
+                      per defecte se salten, perquè llegir-los en força la descàrrega
+Seguretat: si drives.volume_serial o drives.serial_number són coneguts i no coincideixen
+amb el disc muntat a --root, s'atura (evita hashejar el disc equivocat); --force ho omet.
+Els fitxers que no es poden obrir queden a read_errors (vista «Errors» de la pàgina Discs).
 """
 from __future__ import annotations
 
@@ -71,11 +74,12 @@ def sha256_file(path: str, size_hint: int) -> str:
     return h.hexdigest()
 
 
-def _hash_one(root: str, row: tuple) -> tuple:
+def _hash_one(root: str, row: tuple, skip_cloud: bool = True) -> tuple:
     """row = (id, relative_path, size, mtime).
 
     Retorna (id, relative_path, hash|None, size, mtime_iso, error), on error és None,
-    "missing" (el fitxer ja no hi és) o (fase, codi, text) per a read_errors."""
+    "missing" (el fitxer ja no hi és), "cloud" (només al núvol: no es descarrega) o
+    (fase, codi, text) per a read_errors."""
     fid, rel, size_db, mtime_db = row
     path = os.path.join(root, rel)
     try:
@@ -84,6 +88,8 @@ def _hash_one(root: str, row: tuple) -> tuple:
         return fid, rel, None, size_db, mtime_db, "missing"
     except OSError as e:
         return fid, rel, None, size_db, mtime_db, ("hash_stat", error_code(e), error_text(e))
+    if skip_cloud and (getattr(st, "st_file_attributes", 0) & schema.FILE_ATTR_CLOUD_MASK):
+        return fid, rel, None, size_db, mtime_db, "cloud"
     size = st.st_size
     mtime = _utc_iso(st.st_mtime)
     try:
@@ -107,13 +113,18 @@ def _fmt_secs(s: float) -> str:
 
 
 def print_status(conn: sqlite3.Connection) -> None:
-    print(f"{'disc':8} {'fitxers':>10} {'amb hash':>10} {'%':>6} {'mida':>10} {'pendent':>10}  últim escaneig / arrel")
+    # fitxers presents que només són al núvol (es salten per defecte): una passada per inventory
+    cloud = {r[0]: r[1] for r in conn.execute(
+        "SELECT drive_id, COUNT(*) FROM inventory WHERE missing_since_utc IS NULL "
+        "AND (attributes & ?) != 0 GROUP BY drive_id", (schema.FILE_ATTR_CLOUD_MASK,))}
+    print(f"{'disc':8} {'fitxers':>10} {'amb hash':>10} {'%':>6} {'mida':>10} {'pendent':>10} "
+          f"{'núvol':>7}  últim escaneig / arrel")
     for r in conn.execute(
         "SELECT drive_id, files_count, hashed_files, total_bytes, hashed_bytes, last_scan_utc, last_root_path "
         "FROM drives ORDER BY drive_id"):
         pct = 100.0 * r[2] / r[1] if r[1] else 0.0
         print(f"{r[0]:8} {r[1]:>10,} {r[2]:>10,} {pct:>5.1f}% {_fmt_bytes(r[3]):>10} "
-              f"{_fmt_bytes(r[3] - r[4]):>10}  {(r[5] or '')[:10]} {r[6] or ''}")
+              f"{_fmt_bytes(r[3] - r[4]):>10} {cloud.get(r[0], 0):>7,}  {(r[5] or '')[:10]} {r[6] or ''}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -128,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-size", type=int, default=0)
     ap.add_argument("--max-minutes", type=float, default=0, help="Atura després d'aquest temps")
     ap.add_argument("--batch", type=int, default=500, help="Fitxers per transacció")
+    ap.add_argument("--include-cloud", action="store_true",
+                    help="Hashejar també els fitxers que només són al núvol (en força la descàrrega)")
     ap.add_argument("--force", action="store_true", help="No comprovar el serial del volum")
     ap.add_argument("--status", action="store_true", help="Mostra l'estat per disc i surt")
     args = ap.parse_args(argv)
@@ -181,6 +194,13 @@ def main(argv: list[str] | None = None) -> int:
 
     where = "drive_id = ? AND hash_sha256 IS NULL AND missing_since_utc IS NULL AND size_bytes >= ?"
     params: list = [drive, args.min_size]
+    n_cloud_db = 0
+    if not args.include_cloud:
+        # fitxers només al núvol segons l'últim escaneig: fora de la llista (ni es visiten)
+        n_cloud_db = conn.execute(
+            f"SELECT COUNT(*) FROM inventory WHERE {where} AND (attributes & ?) != 0",
+            params + [schema.FILE_ATTR_CLOUD_MASK]).fetchone()[0]
+        where += f" AND (attributes IS NULL OR (attributes & {schema.FILE_ATTR_CLOUD_MASK}) = 0)"
     if args.only_size_dupes:
         # es calcula un sol cop (una passada per tota la DB), no a cada pàgina
         conn.execute("CREATE TEMP TABLE dup_sizes (size_bytes INTEGER PRIMARY KEY) WITHOUT ROWID")
@@ -192,7 +212,9 @@ def main(argv: list[str] | None = None) -> int:
         f"SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM inventory WHERE {where}", params
     ).fetchone()
     print(f"{drive} @ {root}: {todo_files:,} fitxers pendents, {_fmt_bytes(todo_bytes)}"
-          + (" (només mides repetides)" if args.only_size_dupes else ""))
+          + (" (només mides repetides)" if args.only_size_dupes else "")
+          + (f"; {n_cloud_db:,} només al núvol es salten (--include-cloud per hashejar-los)"
+             if n_cloud_db else ""))
     if todo_files == 0:
         return 0
 
@@ -206,7 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     root_long = long_path(root)  # rutes de més de 260 caràcters sense dependre de LongPathsEnabled
     deadline = t0 + args.max_minutes * 60 if args.max_minutes > 0 else None
     done_files = done_bytes = 0
-    n_missing = n_errors = 0
+    n_missing = n_errors = n_cloud = 0
+    skip_cloud = not args.include_cloud
     last_print = 0.0
     last_path = ""
     pool = ThreadPoolExecutor(max_workers=max(1, args.workers)) if args.workers > 1 else None
@@ -229,9 +252,9 @@ def main(argv: list[str] | None = None) -> int:
                     break
                 batch = rows[i:i + args.batch]
                 if pool:
-                    results = list(pool.map(lambda r: _hash_one(root_long, r), batch))
+                    results = list(pool.map(lambda r: _hash_one(root_long, r, skip_cloud), batch))
                 else:
-                    results = [_hash_one(root_long, r) for r in batch]
+                    results = [_hash_one(root_long, r, skip_cloud) for r in batch]
                 now = schema.utc_now_iso()
                 upd: list[tuple] = []
                 miss: list[tuple] = []
@@ -243,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
                         b_files += 1; b_bytes += size
                     elif err == "missing":
                         miss.append((now, fid)); n_missing += 1
+                    elif err == "cloud":
+                        n_cloud += 1  # ha passat a ser només al núvol després de l'escaneig
                     else:
                         n_errors += 1
                         phase, code, text = err
@@ -285,7 +310,9 @@ def main(argv: list[str] | None = None) -> int:
     el = time.time() - t0
     print(f"\nFet: {done_files:,} fitxers, {_fmt_bytes(done_bytes)} en {_fmt_secs(el)} "
           f"({done_bytes / el / 1e6 if el else 0:.0f} MB/s). Desapareguts: {n_missing}, errors: {n_errors}"
-          + (" (registrats a read_errors: vegeu «Errors» a la fitxa del disc)." if n_errors else "."))
+          + (" (registrats a read_errors: vegeu «Errors» a la fitxa del disc)" if n_errors else "")
+          + (f". Només al núvol, no descarregats: {n_cloud + n_cloud_db:,}" if (n_cloud or n_cloud_db) else "")
+          + ".")
     return 0
 
 
