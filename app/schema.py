@@ -26,6 +26,9 @@ Versió (PRAGMA user_version):
          sense efecte sobre el criteri de «modificat»), i la taula read_errors amb les carpetes
          i fitxers que l'escaneig o el hash no han pogut llegir. Només ALTER TABLE ADD COLUMN
          i una taula nova: la migració tarda segons.
+  8    + exclusions per disc: drives.exclude_paths (llista JSON de rutes relatives a l'arrel,
+         carpetes o fitxers, que l'escaneig no recorre) i scans.exclude_paths (la llista
+         aplicada en aquell escaneig; NULL als escaneigs anteriors a la v8). Dues columnes.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -38,7 +41,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Tipus de suport admesos a drives.kind (CHECK) i la seva etiqueta a la interfície.
 DRIVE_KINDS: dict[str, str] = {
@@ -355,6 +358,12 @@ CREATE INDEX IF NOT EXISTS idx_read_errors_scan ON read_errors(scan_id);
 CREATE INDEX IF NOT EXISTS idx_read_errors_drive_path ON read_errors(drive_id, relative_path);
 """
 
+# v8: exclusions per disc (llista JSON de rutes relatives a l'arrel de l'escaneig).
+_V8_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "drives": [("exclude_paths", "TEXT")],  # la llista de la fitxa, aplicada per defecte
+    "scans": [("exclude_paths", "TEXT")],   # la llista aplicada en aquell escaneig ('[]' si cap)
+}
+
 
 def _exec_statements(conn: sqlite3.Connection, sql: str) -> None:
     """Executa un bloc DDL sentència a sentència (executescript faria COMMIT implícit).
@@ -402,6 +411,14 @@ def _apply_v7(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
+def _apply_v8(conn: sqlite3.Connection) -> list[str]:
+    """Columnes de la v8 (idempotent). Retorna les columnes afegides."""
+    added: list[str] = []
+    for table, columns in _V8_COLUMNS.items():
+        added += [f"{table}.{c}" for c in _add_missing_columns(conn, table, columns)]
+    return added
+
+
 def set_pragmas_for_writes(conn: sqlite3.Connection) -> None:
     """Pragmes per a escriptures massives (escaneig / hash). Cal fora de transacció."""
     conn.execute("PRAGMA journal_mode = WAL")
@@ -428,6 +445,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _exec_statements(conn, _DDL_V5_INDEXES)
         _exec_statements(conn, _DDL_V6)
         _apply_v7(conn)
+        _apply_v8(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -468,6 +486,8 @@ def migrate(
         _migrate_to_v6(conn, log)
     if get_user_version(conn) < 7:
         _migrate_to_v7(conn, log)
+    if get_user_version(conn) < 8:
+        _migrate_to_v8(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -675,6 +695,19 @@ def _migrate_to_v7(conn: sqlite3.Connection, log: Callable[[str], None]) -> None
         conn.execute("ROLLBACK")
         raise
     log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}; taula read_errors creada")
+
+
+def _migrate_to_v8(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 8 (exclusions per disc)…")
+    conn.execute("BEGIN")
+    try:
+        added = _apply_v8(conn)
+        conn.execute("PRAGMA user_version = 8")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}")
 
 
 def refresh_drive_counters(

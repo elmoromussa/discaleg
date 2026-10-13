@@ -16,6 +16,7 @@ Pensat per a discs grans (milions de fitxers, TB de dades) i per a re-escaneigs:
 from __future__ import annotations
 
 import csv
+import json
 import os
 import sqlite3
 import stat as statmod
@@ -30,7 +31,7 @@ from app.disk_info import get_physical_disk_info, identity_serial, suggest_kind
 from app.schema import NO_EXT, init_schema, utc_now_iso  # noqa: F401  (re-export)
 from app.volume_info import get_volume_info
 
-TOOL_VERSION = "discaleg-scan/3.0"
+TOOL_VERSION = "discaleg-scan/3.1"
 # Carpetes de sistema a l'arrel del volum que no formen part de l'arxiu (comparació en majúscules)
 EXCLUDE_ROOT_DIRS = frozenset({"$RECYCLE.BIN", "SYSTEM VOLUME INFORMATION"})
 # Guarda contra arrel/disc equivocat en mode update: si el disc tenia >= GUARD_MIN_FILES fitxers
@@ -93,6 +94,77 @@ def _utc_iso(ts: float) -> str:
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
     except (OSError, ValueError, OverflowError):
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Exclusions per disc: rutes relatives a l'arrel (carpeta amb tot el que penja, o fitxer),
+# coincidència exacta sense distingir majúscules, sense comodins. Es guarden com a llista
+# JSON a drives.exclude_paths (fitxa) i scans.exclude_paths (aplicades en cada escaneig).
+# ---------------------------------------------------------------------------
+
+def normalize_exclude(text: str, root: str | None = None) -> str:
+    """Normalitza una exclusió: '/' -> '\\', sense separadors inicials ni finals, i relativa
+    a root si arriba absoluta sota l'arrel. ValueError si és buida, conté '..' o '.',
+    és absoluta fora de l'arrel, o és l'arrel mateixa."""
+    s = (text or "").strip().replace("/", "\\")
+    while "\\\\" in s:
+        s = s.replace("\\\\", "\\")
+    if root:
+        r = os.path.abspath(root).replace("/", "\\").rstrip("\\")
+        if s.upper() == r.upper() or s.upper() == r.upper() + "\\":
+            raise ValueError(f"l'exclusió «{text}» és l'arrel sencera")
+        if s.upper().startswith(r.upper() + "\\"):
+            s = s[len(r) + 1:]
+    s = s.strip("\\").strip()
+    if not s:
+        raise ValueError("exclusió buida")
+    if os.path.splitdrive(s)[0] or s.startswith("\\"):
+        raise ValueError(f"l'exclusió «{text}» és una ruta absoluta fora de l'arrel")
+    if any(p.strip() in ("", ".", "..") for p in s.split("\\")):
+        raise ValueError(f"exclusió no vàlida («..», «.» o separadors repetits): «{text}»")
+    return s
+
+
+def parse_exclude_lines(text: str, root: str | None = None) -> list[str]:
+    """Una exclusió per línia (línies buides i que comencen per # ignorades), normalitzades
+    i sense repeticions (sense distingir majúscules), en l'ordre d'entrada."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in (text or "").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        p = normalize_exclude(line, root)
+        if p.upper() not in seen:
+            seen.add(p.upper())
+            out.append(p)
+    return out
+
+
+def merge_excludes(*lists: list[str] | None) -> list[str]:
+    """Uneix llistes ja normalitzades sense repeticions (sense distingir majúscules)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for lst in lists:
+        for p in lst or []:
+            if p.upper() not in seen:
+                seen.add(p.upper())
+                out.append(p)
+    return out
+
+
+def load_excludes(value: str | None) -> list[str]:
+    """Llista d'exclusions des del JSON de la DB (NULL o text invàlid -> llista buida)."""
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+    except ValueError:
+        return []
+    return [str(p) for p in data if isinstance(p, str) and p] if isinstance(data, list) else []
+
+
+def dump_excludes(paths: list[str]) -> str:
+    return json.dumps(list(paths), ensure_ascii=False)
 
 
 def long_path(path: str) -> str:
