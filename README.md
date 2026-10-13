@@ -31,7 +31,7 @@ pip install -r requirements.txt
 - **`app/`** — Aplicació FastAPI: `schema.py` (esquema i migracions), `audit_to_db.py` (escaneig directe a la DB), `migrate.py` (CLI de migració), `queries*.py`, `routes/`, `templates/`, `static/`.
 - **`tools/`** — Eines de línia d'ordres: `scan_drive.py` (escaneig amb progrés al terminal), `hash_files.py` (SHA-256 incremental per disc) i els scripts originals d'auditoria en CSV (`quick_audit_archive.py`, `import_audit_to_db.py`, `import_all_audits.bat`), conservats com a procedència de la base de dades.
 - **`docs/`** — Documentació (GitHub Pages).
-- **Arrel del projecte** — `requirements.txt`, `run_inventari_WIN.bat`, `PROJECT_OVERVIEW.md` (referència del projecte), `.gitignore`, `.gitattributes`.
+- **Arrel del projecte** — `requirements.txt`, `run_inventari_WIN.bat`, `PROJECT_OVERVIEW.md` (referència del projecte), `CLAUDE.md` (guia per a Claude Code), `LICENSE`, `.gitignore`, `.gitattributes`.
 
 ## Executar l'aplicació
 
@@ -93,3 +93,7 @@ El fitxer `.gitignore` exclou `data/`, `venv/`, `*.db` i `.env`, de manera que e
 - Esquema versió 2: taules `drives` (fitxa i comptadors per disc), `scans` (historial d'escaneigs) i columnes de hash i seguiment a `inventory`; `folder_path` és relatiu a l'arrel escanejada i els fitxers sense extensió tenen `(no_ext)`.
 - Les cerques i llistats grans fan servir **paginació** per no sobrecarregar la memòria.
 - Si la DB no existeix, les rutes que la requereixen retornen error 503; la pàgina d’inici i **Discs** es carreguen sense DB.
+
+## Llicència
+
+Discàleg es distribueix sota la llicència **PolyForm Noncommercial 1.0.0** (fitxer [LICENSE](LICENSE)): pots fer-lo servir, modificar-lo i redistribuir-lo lliurement amb finalitats no comercials, conservant l'avís d'autoria. Per a usos comercials, contacta amb l'autor.

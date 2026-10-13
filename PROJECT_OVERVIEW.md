@@ -24,6 +24,8 @@ Discàleg/
 │   └── static/           # style.css, app.js (tema), explorer.js (explorador)
 ├── data/                 # Ubicació de arxiu_discs.db (exclosa per .gitignore)
 ├── .gitignore             # Exclou data/, venv/, *.db, .env
+├── CLAUDE.md             # Guia per a Claude Code (convencions, dades, verificació)
+├── LICENSE               # PolyForm Noncommercial 1.0.0
 ├── README.md
 ├── requirements.txt
 └── run_inventari_WIN.bat
