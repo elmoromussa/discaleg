@@ -21,6 +21,18 @@
     {% if search_error %}
     <p class="form-hint search-error" role="alert"><strong>Error:</strong> {{ search_error }}</p>
     {% endif %}
+    {% if in_drive %}
+    <div class="search-scope" role="status">
+      <input type="hidden" name="in_drive" value="{{ in_drive }}">
+      <input type="hidden" name="in_path" value="{{ in_path }}">
+      <span class="search-scope-label">Dins de</span>
+      <a class="search-scope-chip" href="{{ request.url_for('explorador_route') }}?drive={{ in_drive | urlencode }}&amp;path={{ in_path | urlencode }}" title="Obre la carpeta a l'explorador">
+        <strong>{{ in_drive }}</strong>{% if in_path %} › {{ in_path.replace('/', ' › ') }}{% else %} › (tot el disc){% endif %}
+      </a>
+      <a class="search-scope-clear" href="{{ clear_scope_url }}" title="Treu l'àmbit i cerca a tots els discs" aria-label="Treu l'àmbit de carpeta">✕</a>
+      <span class="form-hint">Sense cap terme es llisten tots els fitxers de la carpeta i les subcarpetes. El filtre de discs de sota s'ignora.</span>
+    </div>
+    {% endif %}
     <fieldset class="advanced-search-fieldset">
       <legend>Cerca bàsica</legend>
       <div class="form-group">
@@ -144,7 +156,7 @@
           {% for r in rows_files %}
           <tr>
             <td>{{ r.drive_id }}</td>
-            <td class="mono">{{ r.relative_path }}</td>
+            <td class="mono"><a class="search-path-link" href="{{ request.url_for('explorador_route') }}?drive={{ r.drive_id | urlencode }}&amp;path={{ (r.relative_path.rsplit('\\', 1)[0] if '\\' in r.relative_path else '') | replace('\\', '/') | urlencode }}" title="Obre la carpeta a l'explorador">{{ r.relative_path }}</a></td>
             <td class="mono">{{ r.name }}{% if r.missing_since_utc %} <span class="msg-error" title="No present a l'últim escaneig ({{ r.missing_since_utc[:10] }})">(desaparegut)</span>{% endif %}</td>
             <td><code>{{ r.extension or "" }}</code></td>
             <td class="bytes">{{ r.size_bytes | format_bytes }}</td>

@@ -10,6 +10,7 @@ from app import queries
 PER_PAGE = 50
 FILES_PER_GROUP = 50
 FOLDERS_PER_GROUP = 50
+FOCUS_FILES = 500  # fitxers mostrats en mode «grup» (un sol grup, des de l'explorador)
 
 
 def _pagination_urls(request: Request, page: int, total_pages: int):
@@ -63,10 +64,35 @@ def duplicates_page(
     templates: Jinja2Templates,
     conn: sqlite3.Connection,
 ) -> HTMLResponse:
+    # Mode «grup»: un sol grup de duplicats d'un fitxer concret (enllaç des de l'explorador)
+    group = (request.query_params.get("group") or "").strip().lower()
+    focus = None
+    if group in ("hash", "name-size", "name"):
+        if group == "hash":
+            h = (request.query_params.get("hash") or "").strip().lower()
+            files = queries.get_duplicate_hash_files(conn, h, limit=FOCUS_FILES) if h else []
+            focus = {"kind": "hash", "hash": h, "name": files[0]["name"] if files else "",
+                     "size_bytes": files[0]["size_bytes"] if files else None, "files": files}
+        elif group == "name-size":
+            name = (request.query_params.get("name") or "").strip()
+            size_raw = (request.query_params.get("size") or "").strip()
+            size = int(size_raw) if size_raw.isdigit() else None
+            files = queries.get_duplicate_name_size_files(conn, name, size, limit=FOCUS_FILES) if name and size is not None else []
+            focus = {"kind": "name-size", "name": name, "size_bytes": size, "files": files}
+        else:
+            name = (request.query_params.get("name") or "").strip()
+            files = queries.get_duplicate_name_files(conn, name, limit=FOCUS_FILES) if name else []
+            focus = {"kind": "name", "name": name, "size_bytes": None, "files": files}
+        focus["ndrives"] = len({f["drive_id"] for f in focus["files"]})
+        for f in focus["files"]:
+            rp = f["relative_path"]
+            f["folder"] = rp[: rp.rfind("\\")].replace("\\", "/") if "\\" in rp else ""
+
     type_ = (request.query_params.get("type") or "files").strip().lower()
     if type_ not in ("files", "folders"):
         type_ = "files"
-    mode = (request.query_params.get("mode") or "name").strip().lower()
+    # en mode «grup» el formulari queda preparat amb el mateix criteri
+    mode = (group if focus else (request.query_params.get("mode") or "name")).strip().lower()
     if mode not in ("name", "name-size", "hash"):
         mode = "name"
     if type_ == "folders" and mode == "hash":
@@ -270,7 +296,8 @@ def duplicates_page(
             "mode": mode,
             "hash_scope": hash_scope,
             "hash_coverage": hash_coverage,
-            "submitted": submitted,
+            "focus": focus,
+            "submitted": submitted and focus is None,
             "groups": groups_with_entries,
             "total": total,
             "page": page,

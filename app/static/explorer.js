@@ -51,6 +51,10 @@
   };
 
   var searchUrl = root.getAttribute('data-search-url') || '/search';
+  var duplicatesUrl = root.getAttribute('data-duplicates-url') || '/duplicates';
+  var exportUrl = root.getAttribute('data-export-url') || '/api/explorer/export.csv';
+  els.actions = $('explorer-actions');
+  els.menu = $('explorer-menu');
 
   var state = {
     drives: {},            // drive_id -> fitxa
@@ -402,6 +406,8 @@
     els.back.disabled = state.histIdx <= 0;
     els.forward.disabled = state.histIdx >= state.histMax;
     els.up.disabled = state.drive == null || !state.path;
+    els.actions.hidden = state.drive == null;
+    closeMenu();
   }
 
   function navigate(drive, path, opts) {
@@ -491,9 +497,10 @@
     els.address.scrollLeft = els.address.scrollWidth;
   }
 
-  function nativePath() {
+  /** Ruta nativa (amb l'arrel de l'escaneig) d'una ruta relativa en format API. */
+  function nativePathOf(path) {
     var d = state.drives[state.drive] || {};
-    var rel = state.path ? state.path.split('/').join('\\') : '';
+    var rel = path ? path.split('/').join('\\') : '';
     var rootPath = d.root_path || '';
     if (rootPath) {
       if (!/[\\\/]$/.test(rootPath)) rootPath += '\\';
@@ -502,8 +509,9 @@
     return state.drive + (rel ? '\\' + rel : '');
   }
 
-  els.copy.addEventListener('click', function () {
-    var text = nativePath();
+  function nativePath() { return nativePathOf(state.path); }
+
+  function copyText(text) {
     var done = function () { toast('Ruta copiada: ' + text); };
     var fail = function () { window.prompt('Copieu la ruta:', text); };
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -511,7 +519,232 @@
     } else {
       fail();
     }
+  }
+
+  els.copy.addEventListener('click', function () { copyText(nativePath()); });
+
+  // ------------------------------------------------------------------ menú contextual
+
+  function joinPath(parent, name) { return parent ? parent + '/' + name : name; }
+
+  /** Accions d'una carpeta (fila del llistat o carpeta actual). */
+  function folderMenuItems(path, name, opts) {
+    var items = [];
+    if (opts && opts.openable) {
+      items.push({ label: 'Obre', icon: 'i-folder-open', action: function () { navigate(state.drive, path); } });
+      items.push({ sep: true });
+    }
+    items.push({ label: 'Cerca dins d’aquesta carpeta', icon: 'i-search-folder',
+      href: searchUrl + '?' + qs({ in_drive: state.drive, in_path: path, submitted: 1 }) });
+    items.push({ label: 'Exporta a CSV (només aquesta carpeta)', icon: 'i-download', download: true,
+      href: exportUrl + '?' + qs({ drive_id: state.drive, path: path, recursive: 0 }) });
+    items.push({ label: 'Exporta a CSV (amb subcarpetes)', icon: 'i-download', download: true,
+      href: exportUrl + '?' + qs({ drive_id: state.drive, path: path, recursive: 1 }) });
+    items.push({ sep: true });
+    items.push({ label: 'Copia la ruta', icon: 'i-copy', action: function () { copyText(nativePathOf(path)); } });
+    return items;
+  }
+
+  /** Accions d'un fitxer del llistat. */
+  function fileMenuItems(r) {
+    var dupHref;
+    if (r.hash) {
+      dupHref = duplicatesUrl + '?' + qs({ group: 'hash', hash: r.hash });
+    } else {
+      dupHref = duplicatesUrl + '?' + qs({ group: 'name-size', name: r.name, size: r.size == null ? '' : r.size });
+    }
+    return [
+      { label: 'Cerca aquest nom a tots els discs', icon: 'i-search',
+        href: searchUrl + '?' + qs({ q_name: r.name, submitted: 1 }) },
+      { label: r.hash ? 'Còpies d’aquest fitxer (mateix contingut)' : 'Còpies d’aquest fitxer (nom i mida)',
+        icon: 'i-duplicates', href: dupHref },
+      { sep: true },
+      { label: 'Copia la ruta', icon: 'i-copy',
+        action: function () { copyText(nativePathOf(joinPath(state.path, r.name))); } }
+    ];
+  }
+
+  var menuState = { open: false, returnFocus: null, anchorBtn: null, openedAt: 0 };
+
+  function closeMenu() {
+    if (!menuState.open) return;
+    menuState.open = false;
+    els.menu.hidden = true;
+    els.menu.textContent = '';
+    if (menuState.anchorBtn) menuState.anchorBtn.setAttribute('aria-expanded', 'false');
+    var rf = menuState.returnFocus;
+    menuState.returnFocus = null;
+    menuState.anchorBtn = null;
+    if (rf && document.contains(rf)) rf.focus({ preventScroll: true });
+  }
+
+  function menuItems() { return Array.prototype.slice.call(els.menu.querySelectorAll('[role="menuitem"]')); }
+
+  /**
+   * Obre el menú amb `items` ({label, icon, href?, download?, action?} o {sep:true}).
+   * anchor: {x, y} (punt del ratolí) o {el} (element sota el qual es desplega).
+   */
+  function openMenu(items, anchor, title, returnFocus) {
+    closeMenu();
+    els.menu.textContent = '';
+    if (title) {
+      var head = el('div', 'explorer-menu-head', title);
+      head.title = title;
+      els.menu.appendChild(head);
+    }
+    items.forEach(function (it) {
+      if (it.sep) { els.menu.appendChild(el('div', 'explorer-menu-sep')); return; }
+      var item;
+      if (it.href) {
+        item = el('a', 'explorer-menu-item');
+        item.href = it.href;
+        if (it.download) item.setAttribute('download', '');
+      } else {
+        item = el('button', 'explorer-menu-item');
+        item.type = 'button';
+      }
+      item.setAttribute('role', 'menuitem');
+      item.setAttribute('tabindex', '-1');
+      if (it.icon) item.appendChild(icon(it.icon));
+      item.appendChild(el('span', null, it.label));
+      item.addEventListener('click', function (e) {
+        if (it.action) { e.preventDefault(); closeMenu(); it.action(); return; }
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;  // obre en pestanya nova
+        closeMenu();
+      });
+      els.menu.appendChild(item);
+    });
+    menuState.open = true;
+    menuState.openedAt = Date.now();
+    menuState.returnFocus = returnFocus || null;
+    els.menu.hidden = false;
+    els.menu.style.left = '0px';
+    els.menu.style.top = '0px';
+    var w = els.menu.offsetWidth, h = els.menu.offsetHeight;
+    var x, y;
+    if (anchor.el) {
+      var r = anchor.el.getBoundingClientRect();
+      x = r.left; y = r.bottom + 4;
+      menuState.anchorBtn = anchor.el;
+      anchor.el.setAttribute('aria-expanded', 'true');
+    } else {
+      x = anchor.x; y = anchor.y;
+    }
+    var margin = 8;
+    x = Math.max(margin, Math.min(x, window.innerWidth - w - margin));
+    y = Math.max(margin, Math.min(y, window.innerHeight - h - margin));
+    els.menu.style.left = x + 'px';
+    els.menu.style.top = y + 'px';
+    var first = menuItems()[0];
+    if (first) first.focus();
+  }
+
+  els.menu.addEventListener('keydown', function (e) {
+    var items = menuItems();
+    var idx = items.indexOf(document.activeElement);
+    switch (e.key) {
+      case 'ArrowDown': items[(idx + 1) % items.length].focus(); break;
+      case 'ArrowUp': items[(idx - 1 + items.length) % items.length].focus(); break;
+      case 'Home': items[0].focus(); break;
+      case 'End': items[items.length - 1].focus(); break;
+      case 'Escape': closeMenu(); break;
+      case 'Tab': closeMenu(); return;
+      case ' ':
+        if (document.activeElement && document.activeElement.tagName === 'A') { document.activeElement.click(); break; }
+        return;
+      default: return;
+    }
+    e.preventDefault();
   });
+
+  document.addEventListener('mousedown', function (e) {
+    if (menuState.open && !els.menu.contains(e.target)) closeMenu();
+  });
+  window.addEventListener('resize', closeMenu);
+  els.list.addEventListener('scroll', function () {
+    // el scrollIntoView de la fila en enfocar-la dispara un scroll just després d'obrir: s'ignora
+    if (Date.now() - menuState.openedAt > 250) closeMenu();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && menuState.open) { e.preventDefault(); closeMenu(); }
+  });
+
+  els.actions.addEventListener('click', function () {
+    if (menuState.open && menuState.anchorBtn === els.actions) { closeMenu(); return; }
+    if (state.drive == null) return;
+    openMenu(folderMenuItems(state.path, baseName(state.path) || state.drive),
+      { el: els.actions }, nativePath(), els.actions);
+  });
+
+  function openRowMenu(tr, anchor) {
+    var r = tr._row;
+    if (!r) return;
+    var items = r.kind === 'folder' ? folderMenuItems(r.path, r.name, { openable: true }) : fileMenuItems(r);
+    openMenu(items, anchor, r.name, tr);
+  }
+
+  els.tbody.addEventListener('contextmenu', function (e) {
+    var tr = e.target.closest('tr');
+    if (!tr || !tr._row) return;
+    e.preventDefault();
+    focusRow(tr);
+    openRowMenu(tr, { x: e.clientX, y: e.clientY });
+  });
+
+  // ------------------------------------------------------------------ teclat al llistat
+
+  function focusRow(tr) {
+    var prev = els.tbody.querySelector('tr[tabindex="0"]');
+    if (prev && prev !== tr) prev.setAttribute('tabindex', '-1');
+    tr.setAttribute('tabindex', '0');
+    tr.focus({ preventScroll: true });
+    tr.scrollIntoView({ block: 'nearest' });
+  }
+
+  els.tbody.addEventListener('mousedown', function (e) {
+    var tr = e.target.closest('tr');
+    if (tr && tr._row && !e.target.closest('a, button')) focusRow(tr);
+  });
+
+  els.tbody.addEventListener('keydown', function (e) {
+    var tr = e.target.closest('tr');
+    if (!tr || !tr._row || e.target !== tr) return;
+    var rows = Array.prototype.slice.call(els.tbody.querySelectorAll('tr'));
+    var idx = rows.indexOf(tr);
+    switch (e.key) {
+      case 'ArrowDown': if (idx + 1 < rows.length) focusRow(rows[idx + 1]); break;
+      case 'ArrowUp': if (idx > 0) focusRow(rows[idx - 1]); break;
+      case 'Home': focusRow(rows[0]); break;
+      case 'End': focusRow(rows[rows.length - 1]); break;
+      case 'Enter':
+        if (tr._row.kind === 'folder') navigate(state.drive, tr._row.path);
+        break;
+      case 'F10':
+        if (!e.shiftKey) return;
+        openRowMenu(tr, { el: tr.querySelector('.row-menu-btn') || tr });
+        break;
+      case 'ContextMenu':
+        openRowMenu(tr, { el: tr.querySelector('.row-menu-btn') || tr });
+        break;
+      default: return;
+    }
+    e.preventDefault();
+  });
+
+  function rowMenuButton(tr) {
+    var btn = el('button', 'row-action row-menu-btn');
+    btn.type = 'button';
+    btn.title = 'Accions';
+    btn.setAttribute('aria-label', 'Accions de «' + tr._row.name + '»');
+    btn.setAttribute('aria-haspopup', 'menu');
+    btn.appendChild(icon('i-more'));
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (menuState.open && menuState.anchorBtn === btn) { closeMenu(); return; }
+      openRowMenu(tr, { el: btn });
+    });
+    return btn;
+  }
 
   // ------------------------------------------------------------------ contingut
 
@@ -582,7 +815,7 @@
       rows.push({
         kind: 'file', name: f.name, path: '', ext: cleanExt(f.extension),
         size: f.size_bytes == null ? null : Number(f.size_bytes), items: null,
-        date: f.modified_utc || '', hasTotals: true
+        date: f.modified_utc || '', hasTotals: true, hash: f.hash_sha256 || ''
       });
     });
     return rows;
@@ -629,7 +862,13 @@
     if (state.rows.length === 0) { setListView('empty'); return; }
     if (rows.length === 0) { setListView('nomatch'); return; }
     var frag = document.createDocumentFragment();
-    rows.forEach(function (r) { frag.appendChild(r.kind === 'folder' ? folderRow(r) : fileRow(r)); });
+    rows.forEach(function (r, i) {
+      var tr = r.kind === 'folder' ? folderRow(r) : fileRow(r);
+      tr._row = r;
+      tr.setAttribute('tabindex', i === 0 ? '0' : '-1');
+      tr.querySelector('.col-name').appendChild(rowMenuButton(tr));
+      frag.appendChild(tr);
+    });
     els.tbody.appendChild(frag);
     setListView('table');
     updateSortHeaders();
@@ -680,12 +919,6 @@
     wrap.appendChild(el('span', 'row-name', r.name));
     wrap.title = r.name;
     tdName.appendChild(wrap);
-    var search = el('a', 'row-action');
-    search.href = searchUrl + '?' + qs({ q_name: r.name, submitted: 1 });
-    search.title = 'Cerca aquest nom a tots els discs';
-    search.setAttribute('aria-label', 'Cerca «' + r.name + '» a tots els discs');
-    search.appendChild(icon('i-search'));
-    tdName.appendChild(search);
     tr.appendChild(tdName);
     tr.appendChild(el('td', 'col-type', r.ext ? r.ext.toUpperCase() : '—'));
     tr.appendChild(el('td', 'col-items num', ''));

@@ -96,6 +96,39 @@
   </form>
 </div>
 
+{% if focus %}
+<section class="duplicate-focus card" aria-label="Còpies d'un fitxer">
+  <h2 class="card-title">
+    {% if focus.kind == 'hash' %}Còpies amb el mateix contingut{% elif focus.kind == 'name-size' %}Fitxers amb el mateix nom i mida{% else %}Fitxers amb el mateix nom{% endif %}
+    {% if focus.name %}· <span class="mono">{{ focus.name }}</span>{% endif %}
+    {% if focus.size_bytes is not none %}· {{ focus.size_bytes | format_bytes }}{% endif %}
+  </h2>
+  {% if focus.kind == 'hash' %}<p class="form-hint">SHA-256 <code>{{ focus.hash }}</code>. Només hi apareixen els fitxers que ja tenen hash calculat.</p>
+  {% elif focus.kind == 'name-size' %}<p class="form-hint">Coincidència per nom i mida: una aproximació fins que els fitxers tinguin hash.</p>{% endif %}
+  {% if focus.files %}
+  <p><strong>{{ focus.files | length }}</strong> fitxer(s) en <strong>{{ focus.ndrives }}</strong> disc(s){% if focus.files | length >= 500 %} (mostrats els 500 primers){% endif %}.</p>
+  <div class="table-wrapper">
+    <table>
+      <thead><tr><th>Disc</th><th>Carpeta</th><th>Nom</th><th>Mida</th><th>Modificat</th></tr></thead>
+      <tbody>
+        {% for f in focus.files %}
+        <tr>
+          <td>{{ f.drive_id }}</td>
+          <td class="mono"><a href="{{ request.url_for('explorador_route') }}?drive={{ f.drive_id | urlencode }}&amp;path={{ f.folder | urlencode }}" title="Obre la carpeta a l'explorador">{{ f.folder.replace('/', '\\') or '(arrel)' }}</a></td>
+          <td class="mono">{{ f.name }}</td>
+          <td class="bytes">{{ f.size_bytes | format_bytes }}</td>
+          <td>{{ (f.modified_utc or '')[:19].replace('T', ' ') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No s'ha trobat cap fitxer amb aquest criteri.</div>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if submitted %}
 <p>Total: <strong>{{ total }}</strong> grups. Pàgina {{ page }} de {{ total_pages }}.</p>
 <p class="sort-links">Ordenar per: {% for col in sort_columns_duplicates %}<a href="{{ sort_urls_duplicates[col] }}" class="sortable{% if sort_dup == col %} sort-active{% endif %}">{{ sort_labels_duplicates[col] }}{% if sort_dup == col %} <span class="sort-arrow" aria-hidden="true">{% if dir_dup == 'asc' %}&uarr;{% else %}&darr;{% endif %}</span>{% endif %}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>

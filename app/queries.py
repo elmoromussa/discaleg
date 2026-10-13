@@ -190,6 +190,36 @@ def _search_term_to_like_pattern(term: str) -> str:
     return f"%{term.replace('*', '%').replace('?', '_')}%"
 
 
+def folder_range(path_db: str) -> tuple[str, str] | None:
+    """Límits [lo, hi) del rang de rutes d'una carpeta (format DB, «\\»); None per a l'arrel."""
+    if not path_db:
+        return None
+    prefix = path_db.rstrip("\\") + "\\"
+    return prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1)
+
+
+# Per sota d'aquest nombre de fitxers, una cerca dins d'una carpeta no fa servir la poda FTS.
+FTS_SCOPE_MIN_FILES = 200_000
+
+
+def _folder_files(conn: sqlite3.Connection, drive_id: str, path_db: str) -> int:
+    """Fitxers (recursius) d'una carpeta segons folder_stats, pel rang de (drive_id, folder_path)."""
+    rng = folder_range(path_db)
+    if rng is None:
+        row = conn.execute(
+            "SELECT SUM(files_count) FROM folder_stats WHERE drive_id = ?", (drive_id,)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT SUM(files_count) FROM folder_stats
+            WHERE drive_id = ? AND (folder_path = ? OR (folder_path >= ? AND folder_path < ?))
+            """,
+            (drive_id, path_db, rng[0], rng[1]),
+        ).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
 def _build_search_inventory_where(
     drive_ids: list[str] | None,
     name_like_terms: list[str],
@@ -200,10 +230,14 @@ def _build_search_inventory_where(
     extensions: list[str] | None = None,
     include_missing: bool = False,
     fts_match: str | None = None,
+    in_drive: str | None = None,
+    in_path_db: str | None = None,
 ) -> tuple[str, list]:
     """Construïx WHERE per search_inventory.
     - flex_like_terms: cada terme (name OR relative_path), tots amb AND (mode «nom o ruta»).
-    - name_like_terms / path_like_terms: AND dins cada eix; els dos eixos es combinen amb AND (buit = sense filtre)."""
+    - name_like_terms / path_like_terms: AND dins cada eix; els dos eixos es combinen amb AND (buit = sense filtre).
+    - in_drive / in_path_db: àmbit «dins d'aquesta carpeta» (rang de l'índex únic (drive_id, relative_path));
+      amb àmbit, la cerca sense termes llista tota la carpeta."""
     main_parts: list[str] = []
     params: list = []
 
@@ -221,17 +255,25 @@ def _build_search_inventory_where(
                 "(" + " AND ".join(["relative_path LIKE ?"] * len(path_like_terms)) + ")"
             )
             params.extend(path_like_terms)
-    else:
+    elif not in_drive:
         main_parts.append("1 = 0")
 
-    conditions = [" AND ".join(main_parts)]
+    conditions = [" AND ".join(main_parts)] if main_parts else []
     if fts_match:
         # poda per índex FTS5 (trigram): el LIKE de dalt continua fent el filtre exacte
         conditions.insert(0, "id IN (SELECT rowid FROM inventory_fts WHERE inventory_fts MATCH ?)")
         params.insert(0, fts_match)
     if not include_missing:
         conditions.append("missing_since_utc IS NULL")
-    if drive_ids:
+    if in_drive:
+        rng = folder_range(in_path_db or "")
+        if rng:
+            conditions.insert(0, "drive_id = ? AND relative_path >= ? AND relative_path < ?")
+            params = [in_drive, rng[0], rng[1]] + params
+        else:
+            conditions.insert(0, "drive_id = ?")
+            params = [in_drive] + params
+    elif drive_ids:
         placeholders = ",".join("?" * len(drive_ids))
         conditions.insert(0, f"drive_id IN ({placeholders})")
         params = list(drive_ids) + params
@@ -267,14 +309,20 @@ def search_inventory(
     path_terms: list[str] | None = None,
     flex_terms: list[str] | None = None,
     include_missing: bool = False,
+    in_drive: str | None = None,
+    in_path: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Cerca a inventory. Mode flex: cada terme en (name OR path), AND entre termes.
     Mode eixos: name_terms i path_terms es combinen amb AND (llistes buides = sense filtre en aquell eix).
-    No combineu flex amb eixos en la mateixa crida (flex té prioritat si no és buit)."""
+    No combineu flex amb eixos en la mateixa crida (flex té prioritat si no és buit).
+    in_drive + in_path (format API, «/»): limita la cerca a una carpeta d'un disc; sense termes,
+    llista tots els fitxers de la carpeta (recursivament)."""
     exclude_terms = exclude_terms or []
     name_terms = list(name_terms or [])
     path_terms = list(path_terms or [])
     flex_terms = list(flex_terms or [])
+    in_drive = (in_drive or "").strip() or None
+    in_path_db = (in_path or "").replace("/", "\\").strip("\\") if in_drive else None
 
     if flex_terms:
         like_flex = [_search_term_to_like_pattern(t) for t in flex_terms]
@@ -282,11 +330,15 @@ def search_inventory(
         like_path: list[str] = []
     else:
         like_flex = []
-        if not name_terms and not path_terms:
+        if not name_terms and not path_terms and not in_drive:
             return [], 0
         like_name = [_search_term_to_like_pattern(t) for t in name_terms]
         like_path = [_search_term_to_like_pattern(t) for t in path_terms]
     fts_match = build_fts_match(name_terms, path_terms, flex_terms)
+    if fts_match and in_drive and in_path_db and _folder_files(conn, in_drive, in_path_db) <= FTS_SCOPE_MIN_FILES:
+        # Dins d'una carpeta petita el rang de l'índex únic + LIKE és molt més ràpid que la
+        # poda FTS (que recorre les coincidències de tota la DB): 0,01 s vs 2,5 s mesurats.
+        fts_match = None
 
     where, params = _build_search_inventory_where(
         drive_ids,
@@ -298,6 +350,8 @@ def search_inventory(
         extensions,
         include_missing,
         fts_match,
+        in_drive,
+        in_path_db,
     )
     params_count = list(params)
     if sort_by and sort_by in SEARCH_INVENTORY_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):
@@ -328,16 +382,29 @@ def _build_search_folders_where(
     max_depth: int | None,
     min_size_bytes: int,
     exclude_terms: list[str],
+    in_drive: str | None = None,
+    in_path_db: str | None = None,
 ) -> tuple[str, list]:
     """Construïx la clàusula WHERE i els paràmetres per search_folders."""
-    if not like_terms:
+    if not like_terms and not in_drive:
         conditions = ["1 = 0"]
         params: list = []
-    else:
+    elif like_terms:
         parts = ["folder_path LIKE ?"] * len(like_terms)
         conditions = ["(" + " AND ".join(parts) + ")"]
         params = list(like_terms)
-    if drive_ids:
+    else:
+        conditions = []
+        params = []
+    if in_drive:
+        rng = folder_range(in_path_db or "")
+        if rng:
+            conditions.insert(0, "drive_id = ? AND folder_path >= ? AND folder_path < ?")
+            params = [in_drive, rng[0], rng[1]] + params
+        else:
+            conditions.insert(0, "drive_id = ?")
+            params = [in_drive] + params
+    elif drive_ids:
         placeholders = ",".join("?" * len(drive_ids))
         conditions.insert(0, f"drive_id IN ({placeholders})")
         params = list(drive_ids) + params
@@ -367,15 +434,19 @@ def search_folders(
     exclude_terms: list[str] | None = None,
     sort_by: str | None = None,
     sort_dir: str = "asc",
+    in_drive: str | None = None,
+    in_path: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Cerca en folder_path (folder_stats). Tots els termes han de coincidir (AND).
-    Retorna (rows, total_count)."""
+    in_drive + in_path (format API): només subcarpetes d'aquella carpeta. Retorna (rows, total_count)."""
     exclude_terms = exclude_terms or []
-    if not query_terms:
+    in_drive = (in_drive or "").strip() or None
+    in_path_db = (in_path or "").replace("/", "\\").strip("\\") if in_drive else None
+    if not query_terms and not in_drive:
         return [], 0
     like_terms = [_search_term_to_like_pattern(t) for t in query_terms]
     where, params = _build_search_folders_where(
-        drive_ids, like_terms, max_depth, min_size_bytes, exclude_terms
+        drive_ids, like_terms, max_depth, min_size_bytes, exclude_terms, in_drive, in_path_db
     )
     params_count = list(params)
     if sort_by and sort_by in FOLDER_STATS_SORT_COLUMNS and sort_dir.lower() in ("asc", "desc"):

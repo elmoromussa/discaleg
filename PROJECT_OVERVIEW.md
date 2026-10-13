@@ -63,11 +63,11 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 | Ruta | Descripció |
 |------|-------------|
 | `/` | Inici: si no hi ha DB → benvinguda; si hi ha DB → dashboard (resum per disc, top extensions, top carpetes) |
-| `/search` | Cerca per paraula clau (nom/ruta), filtres per disc |
-| `/duplicates` | Duplicats per nom o nom+mida (fitxers/carpetes) |
+| `/search` | Cerca per paraula clau (nom/ruta), filtres per disc. `?in_drive=&in_path=` limita la cerca a una carpeta (rang de l'índex únic; sense termes llista tota la carpeta; dins de carpetes de menys de 200 k fitxers no s'usa la poda FTS) |
+| `/duplicates` | Duplicats per nom, nom+mida o contingut (fitxers) i per camí (carpetes). `?group=hash&hash=` o `?group=name-size&name=&size=` mostra un sol grup (enllaç «Còpies d'aquest fitxer» de l'explorador) |
 | `/extensions` | Llistat per extensió (paginat) |
 | `/folders` | Llistat de carpetes per mida (paginat) |
-| `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre + contingut, sense accés al sistema de fitxers). Accepta `?drive=&path=` per obrir una carpeta directament. API: `/api/explorer/roots`, `/api/explorer/tree/children`, `/api/explorer/contents`, `/api/explorer/folder-totals` |
+| `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre + contingut, sense accés al sistema de fitxers). Accepta `?drive=&path=` per obrir una carpeta directament. API: `/api/explorer/roots`, `/api/explorer/tree/children`, `/api/explorer/contents`, `/api/explorer/folder-totals`, `/api/explorer/export.csv?drive_id=&path=&recursive=` (CSV en streaming, UTF-8 amb BOM, separador «;»). Menú contextual (clic dret, botó ⋯ o Maj+F10) amb cerca dins la carpeta, exportació CSV, còpies d'un fitxer i copiar la ruta |
 | `/discs` | Gestió de discs: auditar i incorporar, actualitzar o eliminar un disc, i editar-ne la fitxa (etiqueta, tipus, ubicació, notes; `POST /discs/fitxa`) |
 | `/discs/{drive_id}/canvis` | Què ha canviat en cada escaneig del disc: pestanyes de fitxers nous, modificats (mida i data abans/després) i desapareguts, paginades, des de `scan_changes`; `?scan=&tipus=new|changed|missing&page=` |
 | `/health` | JSON: database_exists, database_path |
@@ -79,7 +79,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/db.py:** `get_db()` — obre SQLite; si el fitxer no existeix o l'esquema és antic (cal `python -m app.migrate`), retorna 503.
 - **app/queries.py:** Totes les consultes de lectura (dashboard, cerca, duplicats, extensions, folders, get_drive_ids, etc.).
 - **app/queries_explorer.py:** Consultes per a l'explorador (get_explorer_drives, get_explorer_children, get_explorer_contents, get_explorer_folder_totals): arbre des de `folder_stats`, fitxers d'una carpeta per rang de l'índex únic (drive_id, relative_path), totals recursius per subcarpeta en una sola passada pel rang de (drive_id, folder_path).
-- **app/static/explorer.js:** Frontend de l'explorador (arbre amb càrrega mandrosa i teclat, barra d'adreça, historial via `?drive=&path=`, ordenació, filtre, totals, paginació «carrega més», panell redimensionable).
+- **app/static/explorer.js:** Frontend de l'explorador (arbre amb càrrega mandrosa i teclat, barra d'adreça, historial via `?drive=&path=`, ordenació, filtre, totals, paginació «carrega més», panell redimensionable, menú contextual `role=menu` amb teclat i files del llistat navegables amb fletxes).
 - **app/schema.py:** `SCHEMA_VERSION`, `DRIVE_KINDS` (tipus de suport i etiqueta en català), `init_schema`, `migrate` (pas a pas fins a la versió actual), `refresh_drive_counters`, pragmes per a escriptures massives.
 - **app/audit_to_db.py:** `scan_drive` (escaneig amb fusió update/replace), `delete_drive`, `import_from_csv_folder`, `audit_direct_to_db` (compatibilitat).
 - **app/migrate.py:** CLI de migració (`python -m app.migrate [--db] [--legacy-audits]`).
@@ -87,6 +87,7 @@ La carpeta **temp/** no forma part del projecte; conté scripts històrics (quic
 - **app/volume_info.py:** etiqueta, sistema de fitxers, serial i capacitat del volum (Windows via ctypes).
 - **tools/hash_files.py:** CLI de hash SHA-256 incremental per disc.
 - **app/routes/explorer.py:** Pàgina Explorador (GET /explorador; requereix DB).
+- **app/routes/search.py:** `parse_search_params` normalitza els paràmetres de cerca en un diccionari pla (el format de les cerques desades), `run_file_search` / `run_folder_search` els executen; la pàgina hi afegeix paginació.
 - **app/routes/discs.py:** Pàgina Discs (GET sense DB opcional per llista; POST escaneig en segon pla; `discs_card_post` desa la fitxa del disc; `scan_changes_page` mostra els canvis per escaneig). L'escaneig només omple l'etiqueta del disc si és buida: la que escriu l'usuari a la fitxa es conserva.
 
 ## Comportament sense DB

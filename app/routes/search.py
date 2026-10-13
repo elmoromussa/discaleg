@@ -1,6 +1,13 @@
-"""GET /search — Cerca per paraula clau en fitxers i/o carpetes."""
+"""GET /search — Cerca per paraula clau en fitxers i/o carpetes.
+
+`parse_search_params` normalitza els paràmetres de la URL en un diccionari pla (el mateix
+format que guarden les cerques desades dels espais virtuals) i `run_file_search` /
+`run_folder_search` l'executen; la pàgina només hi afegeix paginació i ordenació.
+"""
 import sqlite3
 from math import ceil
+from typing import Any, Mapping
+
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -45,6 +52,142 @@ def _parse_extensions(extension: str | None) -> list[str]:
     return out
 
 
+def _float_or_none(raw: str) -> float | None:
+    try:
+        return float(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def parse_search_params(qp: Mapping[str, Any], getlist=None) -> dict[str, Any]:
+    """Normalitza els paràmetres de cerca (URL o JSON d'una cerca desada) en un diccionari pla.
+
+    Claus: q_name, q_path, q, scope, drive_ids, extension, min_size_mb, exclude,
+    include_missing, in_drive, in_path, search_type, max_depth, min_size_folders_mb,
+    sort, dir (fitxers), sort_folders, dir_folders. Tot són cadenes/llistes simples
+    perquè es pugui serialitzar tal qual.
+    """
+    def get(key: str, default: str = "") -> str:
+        v = qp.get(key, default)
+        if isinstance(v, list):
+            v = v[0] if v else default
+        return "" if v is None else str(v)
+
+    if getlist is not None:
+        drive_ids = [x for x in getlist("drive_ids") if x and str(x).strip()]
+    else:
+        raw = qp.get("drive_ids") or []
+        drive_ids = [str(x) for x in (raw if isinstance(raw, list) else [raw]) if x and str(x).strip()]
+
+    scope = get("scope", "name").strip().lower() or "name"
+    if scope not in queries.SEARCH_SCOPE_VALUES:
+        scope = "name"
+    search_type = get("search_type", "files").strip() or "files"
+    if search_type not in ("files", "folders", "both"):
+        search_type = "files"
+    in_drive = get("in_drive").strip()
+    in_path = get("in_path").strip().replace("\\", "/").strip("/") if in_drive else ""
+    sort = get("sort_f").strip() or get("sort").strip() or ""
+    direction = (get("dir_f").strip() or get("dir").strip() or "asc").lower()
+    sort_folders = get("sort_folders").strip()
+    dir_folders = (get("dir_folders").strip() or "asc").lower()
+    return {
+        "q_name": get("q_name").strip(),
+        "q_path": get("q_path").strip(),
+        "q": get("q").strip(),
+        "scope": scope,
+        "drive_ids": drive_ids,
+        "extension": (get("extension") or "").strip(),
+        "min_size_mb": get("min_size_mb").strip(),
+        "exclude": get("exclude").strip(),
+        "include_missing": get("include_missing").strip() in ("1", "true", "True"),
+        "in_drive": in_drive,
+        "in_path": in_path,
+        "search_type": search_type,
+        "max_depth": get("max_depth").strip(),
+        "min_size_folders_mb": get("min_size_folders_mb").strip(),
+        "sort": sort if sort in queries.SEARCH_INVENTORY_SORT_COLUMNS else "",
+        "dir": direction if direction in ("asc", "desc") else "asc",
+        "sort_folders": sort_folders if sort_folders in queries.FOLDER_STATS_SORT_COLUMNS else "",
+        "dir_folders": dir_folders if dir_folders in ("asc", "desc") else "asc",
+    }
+
+
+def _file_terms(p: dict[str, Any]) -> tuple[list[str], list[str], list[str], bool]:
+    """(name_terms, path_terms, flex_terms, dual_typed) segons el mode de la cerca."""
+    name_terms = _parse_search_terms(p["q_name"])
+    path_terms = _parse_search_terms(p["q_path"])
+    dual_typed = bool(p["q_name"] or p["q_path"])
+    if dual_typed:
+        return name_terms, path_terms, [], True
+    legacy = _parse_search_terms(p["q"])
+    if p["scope"] == "both":
+        return [], [], legacy, False
+    if p["scope"] == "path":
+        return [], legacy, [], False
+    return legacy, [], [], False
+
+
+def has_search_criteria(p: dict[str, Any]) -> bool:
+    """True si la cerca té prou criteris per executar-se (termes vàlids o un àmbit de carpeta)."""
+    name_terms, path_terms, flex_terms, _ = _file_terms(p)
+    return bool(name_terms or path_terms or flex_terms or p["in_drive"])
+
+
+def run_file_search(
+    conn: sqlite3.Connection,
+    p: dict[str, Any],
+    limit: int,
+    offset: int,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Executa la cerca de fitxers descrita per `p` (vegeu parse_search_params)."""
+    name_terms, path_terms, flex_terms, _ = _file_terms(p)
+    min_size_mb = _float_or_none(p["min_size_mb"])
+    extensions = _parse_extensions(p["extension"])
+    return queries.search_inventory(
+        conn,
+        p["drive_ids"] or None,
+        limit=limit,
+        offset=offset,
+        min_size_bytes=int(min_size_mb * 1024 * 1024) if min_size_mb and min_size_mb > 0 else 0,
+        exclude_terms=_parse_exclude(p["exclude"]),
+        extensions=extensions or None,
+        sort_by=sort_by if sort_by is not None else (p["sort"] or None),
+        sort_dir=sort_dir if sort_dir is not None else p["dir"],
+        name_terms=name_terms,
+        path_terms=path_terms,
+        flex_terms=flex_terms,
+        include_missing=p["include_missing"],
+        in_drive=p["in_drive"] or None,
+        in_path=p["in_path"] or None,
+    )
+
+
+def run_folder_search(
+    conn: sqlite3.Connection, p: dict[str, Any], limit: int, offset: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Executa la cerca de carpetes descrita per `p`."""
+    name_terms, path_terms, flex_terms, _ = _file_terms(p)
+    min_size_mb = _float_or_none(p["min_size_folders_mb"])
+    max_depth = int(p["max_depth"]) if p["max_depth"].isdigit() else None
+    return queries.search_folders(
+        conn,
+        name_terms + path_terms + flex_terms,
+        p["drive_ids"] or None,
+        limit=limit,
+        offset=offset,
+        max_depth=max_depth,
+        min_size_bytes=int(min_size_mb * 1024 * 1024) if min_size_mb and min_size_mb > 0 else 0,
+        exclude_terms=_parse_exclude(p["exclude"]),
+        sort_by=p["sort_folders"] or None,
+        sort_dir=p["dir_folders"],
+        in_drive=p["in_drive"] or None,
+        in_path=p["in_path"] or None,
+    )
+
+
 def _pagination_urls(
     request: Request,
     page: int,
@@ -67,52 +210,9 @@ def search_page(
     templates: Jinja2Templates,
     conn: sqlite3.Connection,
 ) -> HTMLResponse:
-    q = request.query_params.get("q", "").strip()
-    q_name_raw = request.query_params.get("q_name", "").strip()
-    q_path_raw = request.query_params.get("q_path", "").strip()
-    selected_drive_ids = [
-        x for x in request.query_params.getlist("drive_ids")
-        if x and x.strip()
-    ]
-    drive_ids_filter: list[str] | None = selected_drive_ids if selected_drive_ids else None
-    search_type = request.query_params.get("search_type", "files").strip() or "files"
-    if search_type not in ("files", "folders", "both"):
-        search_type = "files"
-    scope = request.query_params.get("scope", "name").strip().lower() or "name"
-    if scope not in queries.SEARCH_SCOPE_VALUES:
-        scope = "name"
-    max_depth_raw = request.query_params.get("max_depth", "").strip()
-    max_depth = int(max_depth_raw) if max_depth_raw.isdigit() else None
-    include_missing = request.query_params.get("include_missing", "").strip() == "1"
-    min_size_mb_raw = request.query_params.get("min_size_mb", "").strip()
-    try:
-        min_size_mb = float(min_size_mb_raw) if min_size_mb_raw else None
-    except ValueError:
-        min_size_mb = None
-    min_size_folders_mb_raw = request.query_params.get("min_size_folders_mb", "").strip()
-    try:
-        min_size_folders_mb = float(min_size_folders_mb_raw) if min_size_folders_mb_raw else None
-    except ValueError:
-        min_size_folders_mb = None
-    exclude_raw = request.query_params.get("exclude", "").strip()
-    exclude_terms = _parse_exclude(exclude_raw)
-    extension_raw = request.query_params.get("extension") or ""
-    extensions_filter = _parse_extensions(extension_raw)
-    extension = extension_raw.strip() or ""
-
-    sort_f = request.query_params.get("sort_f", "").strip() or None
-    dir_f = request.query_params.get("dir_f", "asc").strip().lower()
-    if sort_f not in queries.SEARCH_INVENTORY_SORT_COLUMNS:
-        sort_f = None
-    if dir_f not in ("asc", "desc"):
-        dir_f = "asc"
-
-    sort_folders = request.query_params.get("sort_folders", "").strip() or None
-    dir_folders = request.query_params.get("dir_folders", "asc").strip().lower()
-    if sort_folders not in queries.FOLDER_STATS_SORT_COLUMNS:
-        sort_folders = None
-    if dir_folders not in ("asc", "desc"):
-        dir_folders = "asc"
+    p = parse_search_params(request.query_params, request.query_params.getlist)
+    name_terms, path_terms, flex_terms, dual_typed = _file_terms(p)
+    search_type = p["search_type"]
 
     page_files = max(1, int(request.query_params.get("page", 1)))
     page_folders = max(1, int(request.query_params.get("page_f", 1)))
@@ -121,130 +221,46 @@ def search_page(
 
     all_drive_ids = queries.get_drive_ids(conn)
     extensions = queries.get_extensions_for_filter(conn)
-    rows_files = []
+    rows_files: list = []
     total_files = 0
     total_pages_files = 0
     prev_url_files = next_url_files = None
-    rows_folders = []
+    rows_folders: list = []
     total_folders = 0
     total_pages_folders = 0
     prev_url_folders = next_url_folders = None
 
-    min_size_bytes = int(min_size_mb * 1024 * 1024) if min_size_mb is not None and min_size_mb > 0 else 0
-    min_size_folders_bytes = (
-        int(min_size_folders_mb * 1024 * 1024)
-        if min_size_folders_mb is not None and min_size_folders_mb > 0
-        else 0
-    )
-
-    name_terms_dual = _parse_search_terms(q_name_raw)
-    path_terms_dual = _parse_search_terms(q_path_raw)
-    legacy_terms = _parse_search_terms(q)
-    dual_typed = bool(q_name_raw or q_path_raw)
-
     search_error: str | None = None
-    if dual_typed:
-        if not name_terms_dual and not path_terms_dual:
-            search_error = (
-                "Els camps «Nom del fitxer» i «Ruta» no contenen termes vàlids. "
-                "Ompliu almenys un fragment o useu la cerca en un sol camp."
-            )
-    elif q and not legacy_terms:
+    scoped = bool(p["in_drive"])
+    if dual_typed and not name_terms and not path_terms and not scoped:
+        search_error = (
+            "Els camps «Nom del fitxer» i «Ruta» no contenen termes vàlids. "
+            "Ompliu almenys un fragment o useu la cerca en un sol camp."
+        )
+    elif not dual_typed and p["q"] and not flex_terms and not name_terms and not path_terms and not scoped:
         search_error = "El camp de cerca clàssica no conté cap terme vàlid."
 
     search_executed = False
-    if search_error is None:
-        if dual_typed and (name_terms_dual or path_terms_dual):
-            search_executed = True
-            if search_type in ("files", "both"):
-                rows_files, total_files = queries.search_inventory(
-                    conn,
-                    drive_ids_filter,
-                    limit=PER_PAGE,
-                    offset=offset_files,
-                    min_size_bytes=min_size_bytes,
-                    exclude_terms=exclude_terms,
-                    extensions=extensions_filter if extensions_filter else None,
-                    sort_by=sort_f,
-                    sort_dir=dir_f,
-                    name_terms=name_terms_dual,
-                    path_terms=path_terms_dual,
-                    flex_terms=None,
-                    include_missing=include_missing,
-                )
-                total_pages_files = max(1, ceil(total_files / PER_PAGE)) if total_files else 0
-                prev_url_files, next_url_files = _pagination_urls(
-                    request, page_files, total_pages_files, "page"
-                )
-            if search_type in ("folders", "both"):
-                folder_terms = name_terms_dual + path_terms_dual
-                rows_folders, total_folders = queries.search_folders(
-                    conn,
-                    folder_terms,
-                    drive_ids_filter,
-                    limit=PER_PAGE,
-                    offset=offset_folders,
-                    max_depth=max_depth,
-                    min_size_bytes=min_size_folders_bytes,
-                    exclude_terms=exclude_terms,
-                    sort_by=sort_folders,
-                    sort_dir=dir_folders,
-                )
-                total_pages_folders = max(1, ceil(total_folders / PER_PAGE)) if total_folders else 0
-                prev_url_folders, next_url_folders = _pagination_urls(
-                    request, page_folders, total_pages_folders, "page_f"
-                )
-        elif legacy_terms:
-            search_executed = True
-            inv_name: list[str] = []
-            inv_path: list[str] = []
-            inv_flex: list[str] = []
-            if scope == "both":
-                inv_flex = legacy_terms
-            elif scope == "name":
-                inv_name = legacy_terms
-            else:
-                inv_path = legacy_terms
+    if search_error is None and has_search_criteria(p):
+        search_executed = True
+        if search_type in ("files", "both"):
+            rows_files, total_files = run_file_search(conn, p, PER_PAGE, offset_files)
+            total_pages_files = max(1, ceil(total_files / PER_PAGE)) if total_files else 0
+            prev_url_files, next_url_files = _pagination_urls(
+                request, page_files, total_pages_files, "page"
+            )
+        if search_type in ("folders", "both"):
+            rows_folders, total_folders = run_folder_search(conn, p, PER_PAGE, offset_folders)
+            total_pages_folders = max(1, ceil(total_folders / PER_PAGE)) if total_folders else 0
+            prev_url_folders, next_url_folders = _pagination_urls(
+                request, page_folders, total_pages_folders, "page_f"
+            )
 
-            if search_type in ("files", "both"):
-                rows_files, total_files = queries.search_inventory(
-                    conn,
-                    drive_ids_filter,
-                    limit=PER_PAGE,
-                    offset=offset_files,
-                    min_size_bytes=min_size_bytes,
-                    exclude_terms=exclude_terms,
-                    extensions=extensions_filter if extensions_filter else None,
-                    sort_by=sort_f,
-                    sort_dir=dir_f,
-                    name_terms=inv_name,
-                    path_terms=inv_path,
-                    flex_terms=inv_flex,
-                    include_missing=include_missing,
-                )
-                total_pages_files = max(1, ceil(total_files / PER_PAGE)) if total_files else 0
-                prev_url_files, next_url_files = _pagination_urls(
-                    request, page_files, total_pages_files, "page"
-                )
-            if search_type in ("folders", "both"):
-                rows_folders, total_folders = queries.search_folders(
-                    conn,
-                    legacy_terms,
-                    drive_ids_filter,
-                    limit=PER_PAGE,
-                    offset=offset_folders,
-                    max_depth=max_depth,
-                    min_size_bytes=min_size_folders_bytes,
-                    exclude_terms=exclude_terms,
-                    sort_by=sort_folders,
-                    sort_dir=dir_folders,
-                )
-                total_pages_folders = max(1, ceil(total_folders / PER_PAGE)) if total_folders else 0
-                prev_url_folders, next_url_folders = _pagination_urls(
-                    request, page_folders, total_pages_folders, "page_f"
-                )
-
-    search_attempted = dual_typed or bool(q)
+    search_attempted = dual_typed or bool(p["q"]) or scoped
+    sort_f = p["sort"] or None
+    dir_f = p["dir"]
+    sort_folders = p["sort_folders"] or None
+    dir_folders = p["dir_folders"]
 
     def _sort_url_files(col: str) -> str:
         next_dir = "desc" if (sort_f == col and dir_f == "asc") else "asc"
@@ -256,27 +272,31 @@ def search_page(
 
     sort_urls_files = {col: _sort_url_files(col) for col in FILES_SORT_COLUMNS}
     sort_urls_folders = {col: _sort_url_folders(col) for col in FOLDERS_SORT_COLUMNS}
+    clear_scope_url = str(request.url.remove_query_params(["in_drive", "in_path", "page", "page_f"])) if scoped else None
 
     return templates.TemplateResponse(request, "search.html",
         {
             "request": request,
-            "q": q,
-            "q_name": q_name_raw,
-            "q_path": q_path_raw,
+            "q": p["q"],
+            "q_name": p["q_name"],
+            "q_path": p["q_path"],
             "search_error": search_error,
             "search_executed": search_executed,
             "search_attempted": search_attempted,
-            "selected_drive_ids": selected_drive_ids,
+            "selected_drive_ids": p["drive_ids"],
             "drive_ids": all_drive_ids,
             "extensions": extensions,
-            "extension": extension,
+            "extension": p["extension"],
             "search_type": search_type,
-            "scope": scope,
-            "max_depth": max_depth_raw,
-            "min_size_mb": min_size_mb_raw or "",
-            "include_missing": include_missing,
-            "min_size_folders_mb": min_size_folders_mb_raw or "",
-            "exclude": exclude_raw,
+            "scope": p["scope"],
+            "max_depth": p["max_depth"],
+            "min_size_mb": p["min_size_mb"],
+            "include_missing": p["include_missing"],
+            "min_size_folders_mb": p["min_size_folders_mb"],
+            "exclude": p["exclude"],
+            "in_drive": p["in_drive"],
+            "in_path": p["in_path"],
+            "clear_scope_url": clear_scope_url,
             "sort_f": sort_f,
             "dir_f": dir_f,
             "sort_folders": sort_folders,

@@ -2290,7 +2290,191 @@ tr:hover .row-action,
 }
 
 /* Pantalles estretes: arbre a sobre, contingut a sota */
+/* Botó d'accions de fila (⋯) i fila amb focus de teclat */
+.row-menu-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.explorer-table tbody tr:focus {
+  outline: none;
+}
+
+.explorer-table tbody tr:focus-visible td {
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.explorer-table tbody tr:focus-visible td:not(:first-child) {
+  box-shadow: inset 0 2px 0 var(--primary), inset 0 -2px 0 var(--primary);
+}
+
+.explorer-table tbody tr:focus-visible td:first-child {
+  box-shadow: inset 2px 2px 0 var(--primary), inset 0 -2px 0 var(--primary);
+}
+
+.explorer-table tbody tr:focus-visible td:last-child {
+  box-shadow: inset -2px 2px 0 var(--primary), inset 0 -2px 0 var(--primary);
+}
+
+.explorer-table tbody tr:focus-visible .row-action {
+  opacity: 1;
+}
+
+/* Menú contextual */
+.explorer-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: min(360px, calc(100vw - 16px));
+  padding: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  font-size: 0.88rem;
+}
+
+.explorer-menu-head {
+  padding: 4px 10px 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.explorer-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.explorer-menu-item .icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.explorer-menu-item:hover,
+.explorer-menu-item:focus {
+  background: var(--primary-bg);
+  color: var(--primary);
+  outline: none;
+  text-decoration: none;
+}
+
+.explorer-menu-item:hover .icon,
+.explorer-menu-item:focus .icon {
+  color: var(--primary);
+}
+
+.explorer-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* Àmbit «dins d'aquesta carpeta» a la cerca */
+.search-scope {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  background: var(--primary-bg);
+}
+
+.search-scope-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.search-scope-chip {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.search-scope-chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.search-scope-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+
+.search-scope-clear:hover {
+  background: var(--card-bg);
+  color: var(--primary);
+}
+
+.search-scope .form-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.search-path-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.search-path-link:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.duplicate-focus .card-title .mono {
+  font-weight: 400;
+}
+
 @media (max-width: 820px) {
+  .explorer-menu {
+    left: 8px !important;
+    right: 8px;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .explorer-menu-item {
+    white-space: normal;
+  }
+
   .explorer {
     grid-template-columns: 1fr;
     height: auto;

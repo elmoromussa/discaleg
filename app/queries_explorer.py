@@ -182,7 +182,7 @@ def get_explorer_contents(
         params += [SEP]
     cur = conn.execute(
         f"""
-        SELECT name, extension, size_bytes, modified_utc
+        SELECT name, extension, size_bytes, modified_utc, hash_sha256
         FROM inventory
         WHERE drive_id = ? AND {where} AND missing_since_utc IS NULL
         ORDER BY relative_path
@@ -205,6 +205,44 @@ def get_explorer_contents(
         "direct_bytes": direct_bytes,
         "has_more": (offset + len(files)) < total_files and len(files) == limit,
     }
+
+
+EXPORT_COLUMNS = ("disc", "ruta", "nom", "extensio", "mida_bytes", "modificat_utc", "sha256")
+
+
+def iter_folder_export(
+    conn: sqlite3.Connection, drive_id: str, folder_path: str, recursive: bool, chunk: int = 5000
+):
+    """Itera (drive_id, relative_path, name, extension, size_bytes, modified_utc, hash) dels
+    fitxers presents d'una carpeta, en ordre de l'índex únic (drive_id, relative_path).
+
+    recursive=False: només els fitxers directes (cap separador després del prefix).
+    Pensat per a respostes en streaming: llegeix per blocs de `chunk` files.
+    """
+    folder_db = _to_db(folder_path)
+    prefix = folder_db + SEP if folder_db else ""
+    params: list[Any] = [drive_id]
+    where = ""
+    if prefix:
+        where = " AND relative_path >= ? AND relative_path < ?"
+        params += [prefix, _range_hi(prefix)]
+    if not recursive:
+        where += " AND instr(substr(relative_path, ?), ?) = 0"
+        params += [len(prefix) + 1, SEP]
+    cur = conn.execute(
+        f"""
+        SELECT drive_id, relative_path, name, extension, size_bytes, modified_utc, hash_sha256
+        FROM inventory
+        WHERE drive_id = ?{where} AND missing_since_utc IS NULL
+        ORDER BY relative_path
+        """,
+        params,
+    )
+    while True:
+        rows = cur.fetchmany(chunk)
+        if not rows:
+            break
+        yield from rows
 
 
 def get_explorer_folder_totals(

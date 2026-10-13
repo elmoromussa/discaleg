@@ -176,6 +176,59 @@ def api_explorer_folder_totals(
     return queries_explorer.get_explorer_folder_totals(conn, drive_id.strip(), path)
 
 
+@app.get("/api/explorer/export.csv", name="explorer_export")
+def api_explorer_export(drive_id: str = "", path: str = "", recursive: int = 1):
+    """Exporta els fitxers d'una carpeta a CSV (UTF-8 amb BOM, separador «;») en streaming.
+
+    Obre la seva pròpia connexió perquè el generador viu més enllà de la dependència get_db.
+    """
+    import csv
+    import io
+    from urllib.parse import quote
+
+    from fastapi.responses import StreamingResponse
+
+    from app import queries_explorer
+
+    drive_id = (drive_id or "").strip()
+    if not drive_id:
+        return JSONResponse({"error": "Cal drive_id"}, status_code=400)
+    if not database_path.is_file():
+        return JSONResponse({"error": "Base de dades no trobada"}, status_code=503)
+    path = queries_explorer._normalize_path(unquote(path or ""))
+    recursive_flag = bool(recursive)
+
+    def generate():
+        conn = sqlite3.connect(str(database_path), timeout=10.0, check_same_thread=False)
+        try:
+            buf = io.StringIO()
+            writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+            writer.writerow(queries_explorer.EXPORT_COLUMNS)
+            yield "﻿" + buf.getvalue()
+            buf.seek(0)
+            buf.truncate()
+            n = 0
+            for row in queries_explorer.iter_folder_export(conn, drive_id, path, recursive_flag):
+                writer.writerow(["" if v is None else v for v in row])
+                n += 1
+                if n % 2000 == 0:
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate()
+            yield buf.getvalue()
+        finally:
+            conn.close()
+
+    base = f"{drive_id}_{path.rsplit('/', 1)[-1] if path else 'arrel'}"
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in base) or "export"
+    filename = base + ".csv"
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{safe}.csv\"; filename*=UTF-8''{quote(filename)}",
+        "Cache-Control": "no-store",
+    }
+    return StreamingResponse(generate(), media_type="text/csv; charset=utf-8", headers=headers)
+
+
 @app.get("/discs")
 def discs_route(
     request: Request,
