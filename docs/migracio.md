@@ -5,9 +5,10 @@ Eines que implementen el model d'arxiu v1.3 (`docs/model-arxiu.md`) seguint l'es
 d'anàlisi, el vocabulari i el catàleg (`tools/cataleg.py`). El comprovador de rutes de Metashape,
 la importació de la revisió (`--import`, `--build-projects`) i l'executor vindran després.
 
-## Esquema v9
+## Esquema v9 i v10
 
-`python -m app.migrate` afegeix, sense tocar cap taula existent:
+`python -m app.migrate` afegeix, sense tocar cap taula existent (v10: només la columna
+`psx_check.chunks_json`, detall per chunk del comprovador de rutes):
 
 - `inventory.analysis_class` (text, nul·lable): classe d'anàlisi de cada fitxer (cau; NULL = pendent).
 - `series`, `projects`, `candidates`, `candidate_review`, `project_sources`, `project_refs`,
@@ -176,6 +177,146 @@ La línia «amb serie_match» desglossa el percentatge de bytes de projecte trob
 pel contingut (els `suggerit:` no hi compten), i el percentatge sense comptar els `varis` de capa `FORA` (imatges de disc,
 programari), que no són material d'arxiu.
 
+## Comprovador de rutes dels projectes Metashape (`tools/rutes_metashape.py`)
+
+### Estructura real d'un `.psx` (inspecció del 14/10/2026)
+
+Comprovada en mode lectura (prefix `\\?\`) sobre els 34 `.psx` dels discs connectats (PC-C i
+PC-D: `METASH`, `PROJ-2024-ESTIU`, `ARQ_UA`…), tots guardats per Metashape 2.0 a 2.2 amb format de
+document `1.2.0`. Els projectes PhotoScan antics (p. ex. `INT-7\PROJECTES2020\photoscan_projects`)
+no s'han pogut obrir encara: el comprovador registra la versió i avisa si l'estructura difereix.
+
+```
+<nom>.psx                       XML de 106 bytes:
+                                <document version="1.2.0" path="{projectname}.files/project.zip"/>
+<nom>.files\                    {projectname} = nom del .psx sense extensió; sempre al costat del .psx
+  project.zip  → doc.xml        <document version="1.2.0">
+                                  <chunks next_id active_id> <chunk id="0" path="0/chunk.zip"/> …
+                                  <meta> Info/OriginalSoftwareName (Agisoft Metashape),
+                                         Info/OriginalSoftwareVersion, Info/LastSavedSoftwareVersion
+                                         (p. ex. 2.1.1.17748), Info/LastSavedDateTime,
+                                         Project/AbsolutePaths (false a tots els 34)
+  <chunk>\chunk.zip → doc.xml   <chunk version label enabled> amb sensors, components, cameras
+                                  (<camera id sensor_id label="DSC04946"> + transform; sense ruta),
+                                  depth_map_sets, models, frames (<frame id="0" path="0/frame.zip"/>),
+                                  reference, region, settings, meta
+  <chunk>\<frame>\frame.zip     <frame version> amb cameras, thumbnails, point_cloud, depth_maps, model:
+               → doc.xml          <camera camera_id="0">
+                                    <photo path="../../../sony/DSC04946.JPG">
+                                      <meta> Exif/DateTimeOriginal, Exif/Model, File/ImageWidth…,
+                                             System/FileModifyDate, System/FileSize (bytes) </meta>
+  <chunk>\<frame>\{depth_maps, model, orthomosaic, point_cloud, shapes, thumbnails}\…
+```
+
+- **On viuen les rutes de les fotos**: a `frame.zip` → `doc.xml`, un `<photo path>` per càmera.
+  `chunk.zip` només té l'etiqueta de la càmera (el nom del fitxer sense extensió).
+- **Respecte a què són relatives**: a la carpeta del frame (`<nom>.files\<chunk>\<frame>\`),
+  amb `/` com a separador. Per tant `../../../` és la carpeta que conté el `.psx`,
+  `../../../../` la de dalt, i s'han vist fins a `../../../../../../` (sis nivells:
+  `2024-covetes-sectorH.psx` apunta a `TEMPORAL_COVETES\…` dos nivells per damunt del projecte).
+- **Com es marquen les absolutes**: lletra d'unitat i `:/` (`F:/2024-Covetes/RAW/…`,
+  `K:/SERIES/METASHAPE/…`, `Z:/Foto-Video/PEP_carmelites/…`, `C:/Users/elmor/Documents/…`),
+  encara que `Project/AbsolutePaths` siga `false` (el paràmetre és la preferència en desar; les
+  fotos que no són a la mateixa unitat que el projecte es guarden absolutes). No s'ha vist cap
+  ruta UNC (`//servidor/…`). Un mateix projecte pot barrejar-ne (`sectorH`: 8.893 relatives i
+  5.990 absolutes). 13 dels 28 `.psx` de PC-D apunten a `F:` o `K:` (discs no connectats).
+- **Versió de l'aplicació**: `Info/LastSavedSoftwareVersion` i `Info/OriginalSoftwareVersion` al
+  `<meta>` de `project.zip`; l'atribut `version` del `.psx` és la versió del format (1.2.0).
+  Els projectes PhotoScan 1.6 i 1.7 (INT-7) tenen el mateix format i la mateixa estructura de
+  chunks i frames, però 64 `.psx` antics no porten cap propietat `Info/*` i queden sense versió
+  d'aplicació; 26 més no tenen `project.zip` (la `.files` és buida o incompleta).
+- **Mida de cada foto**: `System/FileSize` al `<meta>` de cada `<photo>` (present a les 100 %
+  de les 1,2 M de càmeres inspeccionades): permet resoldre per nom + mida sense obrir cap foto.
+- **Projectes incomplets**: `.files` sense `project.zip` (`metashape\2024-covetes-tot2.psx`) i
+  chunks absents (`metashape\2024-covetes-tot.psx`: 20 de 32 `chunk.zip` no hi són). El
+  comprovador ho anota a `notes` i continua.
+- Un chunk pot tenir diversos frames (sistemes multicàmera); als 34 projectes n'hi ha un per
+  chunk. Les càmeres del frame són les fotos: el total de càmeres d'un `.psx` és la suma de tots
+  els frames de tots els chunks.
+
+### Ús
+
+```bash
+python tools/rutes_metashape.py                       # tots els .psx dels discs connectats
+python tools/rutes_metashape.py --drive INT-5         # un disc (repetible)
+python tools/rutes_metashape.py --drive INT-5 --path DW23_TFM26\METASHAPE23
+python tools/rutes_metashape.py --selection INT-5 "DW23_TFM26\METASHAPE23\FGM-GLOBAL2024.psx"
+```
+
+Només lectura dels discs (prefix `\\?\`, mai obri cap foto ni Metashape) i de l'inventari;
+escriu només la taula `psx_check` (una fila per `.psx`, reescrita a cada execució) i el CSV.
+Un disc es considera connectat si `drives.last_root_path` existeix i el serial del volum
+coincideix amb el registrat; els altres se salten i el resum els llista amb els seus `.psx`.
+
+**Resolució de cada foto** contra l'inventari (fitxers vius):
+
+| Resolució | Com | Columna |
+|---|---|---|
+| `same` | ruta relativa (des de la carpeta del frame) o absoluta amb la lletra de l'arrel del mateix disc, trobada al mateix disc per l'índex únic (disc, ruta) | `resolved_same` |
+| `same-mogut` | no és a la ruta guardada, però el mateix nom (sense majúscules) i mida és al mateix disc en una altra carpeta | `resolved_same` |
+| `altre` | ruta absoluta d'un altre disc (per la lletra de la seua arrel registrada) que hi existeix | `resolved_other_drive` |
+| `altre-nom-mida` | el mateix nom i mida en un altre disc (índex per mida, nom comparat sense majúscules) | `resolved_other_drive` |
+| `orfe` | enlloc (o sense `System/FileSize` i ruta no trobada) | `orphans` |
+
+Les lletres d'unitat de les rutes absolutes només són fiables per al disc del mateix `.psx`:
+les altres han canviat amb el temps, per això la prova de fons és nom + mida. Una ruta relativa
+que puja per damunt de l'arrel del disc es resol també per nom + mida.
+
+**Eixida.** `psx_check`: `app_version` (`Info/LastSavedSoftwareVersion`), `chunks`, `cameras`,
+`resolved_same`, `resolved_other_drive`, `orphans`, `photos_json` (llista per càmera:
+`[ruta tal com la guarda el .psx, resolució, disc, ruta trobada, mida]`) i `notes` (JSON:
+versió del format, aplicació original, frames, recompte per resolució, discs implicats, fitxers i
+bytes de la `.files` a l'inventari, incidències com «falta project.zip» o chunks absents).
+`data/rutes_metashape_AAAA-MM-DD.csv` (UTF-8 amb BOM, `;`): una fila per `.psx` amb les mateixes
+xifres més `chunks_repetits`, `absorbit` i `absorbit_per`. Resum: `.psx` resolts del tot,
+parcials, orfes del tot, càmeres per resolució, chunks amb cada producte, els 20 amb més orfes,
+chunks repetits i `.psx` absorbits, i els discs saltats.
+
+### Chunks: càmeres, alineació i productes (`psx_check.chunks_json`)
+
+De cada chunk es desa `{id, etiqueta, activat, cameres, alineades, fotos, models, productes}` i,
+si el chunk és repetit, `repetit_a` (els altres `.psx` on és) i `dominat_per` (els que el tenen
+amb igual o més processament). Elements usats, comprovats sobre 1.082 chunks de 107 projectes:
+
+| Dada | On | Element |
+|---|---|---|
+| etiqueta, activat | `chunk.zip` → `doc.xml` | `<chunk label enabled>` |
+| càmeres | `chunk.zip` | `<cameras><camera>` i també `<cameras><group><camera>` (220 chunks només tenen càmeres dins de grups) |
+| alineades | `chunk.zip` | càmeres amb fill `<transform>` (les no alineades no en tenen) |
+| punts d'enllaç | `frame.zip` → `doc.xml` | `<point_cloud path>` (a Metashape 2.x el «point cloud» del frame són els punts d'enllaç; el dens és `dense_cloud`) |
+| mapes de profunditat | `chunk.zip` | `<depth_map_sets><depth_maps>` |
+| núvol dens | `chunk.zip` | `<dense_clouds><dense_cloud>` |
+| malla | `chunk.zip` | `<models><model>` (`models` = quants n'hi ha) |
+| textura | `model.zip` → `doc.xml` de cada model del frame | `<texture path>` (format antic) o `<textures><texture>` (nou); `<mesh><hasUV>` no serveix perquè sempre hi és |
+| ortofoto | `chunk.zip` | `<orthomosaics><orthomosaic>` |
+| MDT | `chunk.zip` | `<elevations><elevation>` |
+| model en tessel·les | `chunk.zip` | `<tiled_models><tiled_model>` |
+
+Les fotos del chunk ixen dels `<photo path>` de tots els seus frames.
+
+### Chunks repetits i `.psx` absorbits (`data/chunks_repetits_AAAA-MM-DD.csv`)
+
+Dos chunks són «el mateix» si tenen la mateixa etiqueta i el mateix conjunt de noms de foto
+(nom de fitxer, sense carpeta ni majúscules). L'informe llista els grups presents en més d'un
+`.psx`, una fila per chunk i `.psx`: `grup, etiqueta, cameres, n_psx, disc, ruta_psx, chunk_id,
+alineades`, un 0/1 per producte, `processament` (quants productes), `maxim_del_grup` (té el
+màxim processament del grup), `psx_absorbit` i `absorbit_per`.
+
+Un chunk està **dominat** per un altre del mateix grup si aquest té tantes o més càmeres
+alineades i tots els productes del primer; en empat exacte, domina el del `.psx` amb més chunks
+(el «final») i, si també empaten, el primer per disc i ruta, perquè de dues còpies idèntiques
+només una compte com a absorbida. Un `.psx` queda **absorbit** quan tots els seus chunks amb
+fotos estan dominats per chunks d'altres `.psx`; `absorbit_per` és la unió d'aquests. És la
+lectura del model §3.2 sense obrir Metashape: el final es conserva, els solts absorbits poden
+anar a quarantena, i els solts amb més processament que el final (fila amb `maxim_del_grup = 1`
+i `psx_absorbit = 0`) són els que cal mirar un a un.
+
+`--selection DISC RUTA` no toca la DB: comprova aquell `.psx` i escriu
+`data/seleccio_<nom>.txt` (o `--out`), una línia per foto resolta sense repetir:
+ruta relativa a la carpeta del `.psx` amb `/` (`../RAW/x.JPG`; `DISC:ruta` si és en un altre
+disc), mida i hash SHA-256 si l'inventari el té (tabuladors). És el `RAW\seleccio.txt` del model
+§2.2, pendent de revisar les fotos d'altres discs.
+
 ## Verificació feta (14/10/2026)
 
 - `pyflakes app tools` net (llevat dels avisos preexistents).
@@ -186,6 +327,10 @@ programari), que no són material d'arxiu.
   `DELETE`/`INSERT` a `candidates`; signatures de totes les altres taules idèntiques abans i
   després; CSV amb una fila per candidat i BOM; regenerar un sol disc conserva els
   `candidate_id` i no toca els altres discs.
+- Comprovador de rutes sobre els 652 `.psx` dels set discs connectats (EXT-B, INT-3, INT-5,
+  INT-7, MAC-INESIA, PC-C, PC-D): 197 s, 2,15 M de càmeres i 3.318 chunks; 608 `.psx` resolts
+  del tot, 6 parcials, 11 orfes del tot (PhotoScan 2016-2020 d'INT-7), 27 sense càmeres o
+  il·legibles; 581 grups de chunks repetits i 407 `.psx` absorbits. Només escriu `psx_check`.
 - DB real (22 discs, 7,0 M de fitxers), amb còpia prèvia a `BACKUP_DB\arxiu_discs_v8_2026-10-14.db`:
   migració 91 s (la major part l'`ANALYZE`), `quick_check` ok; catàleg 92 s (classificació
   inclosa), 2.328 candidats (530 projectes de primer nivell, 1.730 capes, 22 residus, 4 de

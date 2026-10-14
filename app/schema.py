@@ -33,6 +33,8 @@ Versió (PRAGMA user_version):
          candidate_review, project_sources, project_refs, psx_check, events i copies, i la
          columna inventory.analysis_class (classe d'anàlisi de app/classes.py, cau que omple
          tools/cataleg.py). Tot additiu: la migració tarda segons.
+  10   + psx_check.chunks_json (detall per chunk del comprovador de rutes Metashape: etiqueta,
+         càmeres, alineades, productes). Una columna.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -45,7 +47,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Tipus de suport admesos a drives.kind (CHECK) i la seva etiqueta a la interfície.
 DRIVE_KINDS: dict[str, str] = {
@@ -572,6 +574,20 @@ def _apply_v8(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
+# v10: detall per chunk de cada .psx comprovat (tools/rutes_metashape.py).
+_V10_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "psx_check": [("chunks_json", "TEXT")],
+}
+
+
+def _apply_v10(conn: sqlite3.Connection) -> list[str]:
+    """Columna de la v10 (idempotent). Retorna les columnes afegides."""
+    added: list[str] = []
+    for table, columns in _V10_COLUMNS.items():
+        added += [f"{table}.{c}" for c in _add_missing_columns(conn, table, columns)]
+    return added
+
+
 def _apply_v9(conn: sqlite3.Connection) -> list[str]:
     """Columna i taules de la v9 (idempotent). Retorna les columnes afegides."""
     added: list[str] = []
@@ -609,6 +625,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _apply_v7(conn)
         _apply_v8(conn)
         _apply_v9(conn)
+        _apply_v10(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -653,6 +670,8 @@ def migrate(
         _migrate_to_v8(conn, log)
     if get_user_version(conn) < 9:
         _migrate_to_v9(conn, log)
+    if get_user_version(conn) < 10:
+        _migrate_to_v10(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -887,6 +906,19 @@ def _migrate_to_v9(conn: sqlite3.Connection, log: Callable[[str], None]) -> None
         raise
     log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}; taules series, projects, "
         "candidates, candidate_review, project_sources, project_refs, psx_check, events i copies")
+
+
+def _migrate_to_v10(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 10 (psx_check.chunks_json)…")
+    conn.execute("BEGIN")
+    try:
+        added = _apply_v10(conn)
+        conn.execute("PRAGMA user_version = 10")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}")
 
 
 def refresh_drive_counters(

@@ -291,8 +291,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     conn = sqlite3.connect(str(args.db), timeout=60.0)
     try:
-        if schema.get_user_version(conn) < 9:
-            print("Cal l'esquema v9: executa  python -m app.migrate", file=sys.stderr)
+        if schema.get_user_version(conn) < schema.SCHEMA_VERSION:
+            print(f"Cal l'esquema v{schema.SCHEMA_VERSION}: executa  python -m app.migrate", file=sys.stderr)
             return 2
         schema.set_pragmas_for_writes(conn)
         t0 = time.time()
