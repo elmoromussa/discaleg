@@ -1,5 +1,6 @@
-# Base de dades i dades locals (no pujar a GitHub)
-data/
+# Base de dades i dades locals (no pujar a GitHub); el vocabulari del catàleg sí que es versiona
+data/*
+!data/vocabulari.json
 *.db
 *.sqlite
 *.sqlite3

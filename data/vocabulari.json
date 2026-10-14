@@ -1,0 +1,302 @@
+{
+  "_comentari": "Vocabulari del catàleg de migració (tools/cataleg.py). Format documentat a docs/migracio.md. Les paraules clau i els contenidors s'ajusten a mà; el codi no en depèn. Paraules amb separador o acabades en dígit (la petaca, dh-, dw_, dh2, registre23) es busquen literalment a l'inici d'un token; la resta, token a token.",
+  "version": 1,
+  "serie_from_content": true,
+  "series": [
+    {
+      "name": "diablo-wasi",
+      "code": "DW",
+      "kind": "lloc",
+      "keywords": [
+        "diablo",
+        "diablowasi",
+        "diblowasi",
+        "dw",
+        "dws",
+        "dh",
+        "petaca",
+        "lapetaca",
+        "fgm",
+        "ftgm",
+        "chacha",
+        "chachaxr",
+        "chxr",
+        "tambillo",
+        "palp",
+        "leyme",
+        "leymebamba",
+        "uchuraccay",
+        "kuelap",
+        "yupana",
+        "congona",
+        "diablohuasi",
+        "huasi",
+        "dh2",
+        "dh-",
+        "dh_",
+        "dw_",
+        "registre23",
+        "metashape23",
+        "la petaca"
+      ]
+    },
+    {
+      "name": "covetes",
+      "code": "COV",
+      "kind": "lloc",
+      "keywords": [
+        "covetes",
+        "cov",
+        "covetesvr",
+        "bocairent"
+      ]
+    },
+    {
+      "name": "sanxo-llop",
+      "code": "SLL",
+      "kind": "lloc",
+      "keywords": [
+        "sanxo",
+        "sanxollop",
+        "sll"
+      ]
+    },
+    {
+      "name": "montesa",
+      "code": "MON",
+      "kind": "lloc",
+      "keywords": [
+        "montesa",
+        "poterna"
+      ]
+    },
+    {
+      "name": "carmelites-gandia",
+      "code": "CG",
+      "kind": "lloc",
+      "keywords": [
+        "carmelites",
+        "gandia"
+      ]
+    },
+    {
+      "name": "alcavors",
+      "code": "ALC",
+      "kind": "lloc",
+      "keywords": [
+        "alcavors",
+        "alcavor",
+        "alcavor360"
+      ]
+    },
+    {
+      "name": "banyeres",
+      "code": "BAN",
+      "kind": "lloc",
+      "keywords": [
+        "banyeres"
+      ]
+    },
+    {
+      "name": "maova",
+      "code": "MAO",
+      "kind": "lloc",
+      "keywords": [
+        "maova"
+      ]
+    },
+    {
+      "name": "pep",
+      "code": "PEP",
+      "kind": "programa",
+      "keywords": [
+        "pep",
+        "benasau",
+        "fontanars"
+      ]
+    },
+    {
+      "name": "black-apple",
+      "code": "BLK",
+      "kind": "programa",
+      "tipus": "video",
+      "keywords": [
+        "black-apple",
+        "blackapple",
+        "blackbelt",
+        "blackbeltxa"
+      ]
+    },
+    {
+      "name": "minutera",
+      "code": "MIN",
+      "kind": "client",
+      "keywords": [
+        "minutera"
+      ]
+    },
+    {
+      "name": "inesia",
+      "code": "INE",
+      "kind": "client",
+      "keywords": [
+        "inesia"
+      ]
+    },
+    {
+      "name": "docencia",
+      "code": "DOC",
+      "kind": "tipus",
+      "keywords": [
+        "opos",
+        "oposdibujo",
+        "oposdibuix",
+        "docencia",
+        "cursos",
+        "curs",
+        "universitat",
+        "avm",
+        "tfm",
+        "tfg",
+        "pfc",
+        "doctorat",
+        "tallers"
+      ]
+    },
+    {
+      "name": "fototeca",
+      "code": "FOT",
+      "kind": "tipus",
+      "keywords": [
+        "fototeca",
+        "viatge",
+        "fototeca_raw",
+        "360_series",
+        "videos360",
+        "sky_equi",
+        "skies"
+      ]
+    },
+    {
+      "name": "publicacions",
+      "code": "PUB",
+      "kind": "tipus",
+      "keywords": [
+        "publicacions",
+        "publicacio",
+        "articles",
+        "article",
+        "poster",
+        "chnt",
+        "ponencia"
+      ]
+    }
+  ],
+  "containers": [
+    "(^|\\\\)PROJECTES20\\d\\d[A-Z]?$",
+    "(^|\\\\)PROJ2\\d(-2\\d)?$",
+    "^PROJ-2024-ESTIU(\\\\PROJ-2024-ESTIU)?$",
+    "(^|\\\\)FOT-VID2\\d$",
+    "^FTGM2\\d$",
+    "^20\\d\\d$",
+    "^RECUPERACIO_Z$",
+    "^RECUPERACIO_Z\\\\Root$",
+    "^RECUPERACIO_Z\\\\Root\\\\Foto-Video$",
+    "^RECUPERACIO_Z\\\\Root\\\\Foto-Video\\\\20\\d\\d[A-Z]?$",
+    "^RECOVERY_RAID5$",
+    "^RECOVERY_RAID5\\\\FOTO-VIDEO-RAID5$",
+    "^Root$",
+    "^Root\\\\revisarYUPANA$",
+    "^Users$",
+    "^Users\\\\elmor$",
+    "^Users\\\\elmor\\\\(Documents|Desktop|Downloads|Pictures|Videos)$",
+    "^Users\\\\elmor\\\\Desktop\\\\DESKTOP$",
+    "^ESTEVE$",
+    "^ESTEVE\\\\(projectes|fototeca)$",
+    "^BACK_SSDEX$",
+    "^BACK_SSDEX\\\\(mac|downloads_win_23)$",
+    "^backups$",
+    "^cerebrus-projectes2016$",
+    "^FOTOTECA$"
+  ],
+  "layer_words": {
+    "RAW": [
+      "raw",
+      "dcim",
+      "orig",
+      "captur",
+      "sony",
+      "nikon",
+      "dji",
+      "gopro",
+      "insta",
+      "fusion",
+      "fotos",
+      "photos",
+      "imatges",
+      "videos",
+      "registre"
+    ],
+    "OUT": [
+      "out",
+      "export",
+      "final",
+      "render",
+      "entrega",
+      "lliur",
+      "ortho",
+      "orto",
+      "mdt",
+      "web",
+      "pano2vr"
+    ],
+    "PROJ": [
+      "metashape",
+      "photoscan",
+      "lightroom",
+      "lrcat",
+      "blender",
+      "qgis",
+      "premiere",
+      "ptgui",
+      "proj",
+      "chunks"
+    ],
+    "DOC": [
+      "doc",
+      "informe",
+      "memoria",
+      "planos",
+      "permis"
+    ]
+  },
+  "system_names": [
+    "$recycle.bin",
+    "system volume information",
+    ".spotlight-v100",
+    ".fseventsd",
+    ".trashes",
+    ".history",
+    ".temporaryitems",
+    ".documentrevisions-v100",
+    "recycler",
+    "recycle-bin-raid5",
+    "msdownld.tmp",
+    "$sysreset",
+    "$winreagent"
+  ],
+  "recovery_pattern": "^found\\.\\d{3}$",
+  "devices": [
+    "sony-a7iii",
+    "sony-a7r",
+    "nikon-d300s",
+    "dji-mavic3",
+    "dji-mini",
+    "insta360-x3",
+    "gopro-fusion",
+    "gopro-max",
+    "mobil-esteve",
+    "escaner",
+    "altre"
+  ]
+}
