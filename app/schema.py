@@ -45,6 +45,8 @@ Versió (PRAGMA user_version):
          durant la migració: les còpies fetes des de macOS tenen els accents en NFD) amb l'índex
          parcial cobridor idx_inventory_name_key(name_key, size_bytes, drive_id). La migració
          tarda minuts amb milions de files (omplir la columna i construir l'índex).
+  13   + spaces.source: qui ha creat l'espai ('import' = tools/espais.py --import, que amb
+         --prune pot esborrar-lo si queda buit; NULL = creat a mà, no es toca mai). Una columna.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -58,7 +60,11 @@ import unicodedata
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
+
+# Origen d'un espai (spaces.source): 'import' = creat per tools/espais.py --import (i
+# esborrable per --prune si queda buit); NULL = creat a mà (no es toca mai).
+SPACE_SOURCE_IMPORT = "import"
 
 # Arxiu virtual (v12): tipus d'espai d'arxiu (spaces.archive_kind), estats (spaces.state) i
 # paper de cada membre (space_members.role). NULL a archive_kind = espai normal.
@@ -687,6 +693,19 @@ def _apply_v12(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
+# v13: origen de cada espai (import o a mà).
+_V13_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "spaces": [("source", "TEXT")],
+}
+
+
+def _apply_v13(conn: sqlite3.Connection) -> list[str]:
+    added: list[str] = []
+    for table, columns in _V13_COLUMNS.items():
+        added += [f"{table}.{c}" for c in _add_missing_columns(conn, table, columns)]
+    return added
+
+
 def _apply_v11(conn: sqlite3.Connection) -> list[str]:
     """Columnes de la v11 (idempotent). Retorna les columnes afegides."""
     added: list[str] = []
@@ -743,6 +762,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _apply_v10(conn)
         _apply_v11(conn)
         _apply_v12(conn)
+        _apply_v13(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -793,6 +813,8 @@ def migrate(
         _migrate_to_v11(conn, log)
     if get_user_version(conn) < 12:
         _migrate_to_v12(conn, log)
+    if get_user_version(conn) < 13:
+        _migrate_to_v13(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -1078,6 +1100,19 @@ def _migrate_to_v12(conn: sqlite3.Connection, log: Callable[[str], None]) -> Non
         conn.execute("ROLLBACK")
         raise
     log("  índex idx_inventory_name_key creat")
+
+
+def _migrate_to_v13(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 13 (spaces.source)…")
+    conn.execute("BEGIN")
+    try:
+        added = _apply_v13(conn)
+        conn.execute("PRAGMA user_version = 13")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}")
 
 
 def refresh_drive_counters(

@@ -3,6 +3,7 @@ exportació (docs/migracio.md, «Arxiu virtual»).
 
   python tools/espais.py --import data/conjunts_2026-10-14.csv          # prova (no escriu res)
   python tools/espais.py --import data/conjunts_2026-10-14.csv --apply  # escriu els espais
+  python tools/espais.py --import ... --prune --apply   # i esborra el que ja no és al CSV
   python tools/espais.py --tree [--root NOM]
   python tools/espais.py --coverage INT-5        (o --coverage all)
   python tools/espais.py --check
@@ -11,6 +12,10 @@ exportació (docs/migracio.md, «Arxiu virtual»).
 Només llig la DB, llevat de --import amb --apply (escriu a spaces, items i space_members).
 CSV: UTF-8 amb BOM i separador «;». Els errors de la importació van a
 data/conjunts_errors.csv (columna «nivell»: error bloqueja tot; avis no).
+
+--prune: els membres d'espais d'arxiu que no són al CSV s'esborren, i els espais creats per
+una importació (spaces.source = 'import') que queden sense membres ni fills també, de baix a
+dalt. Els espais creats a mà (source NULL) no es toquen mai. Així la DB queda com el CSV.
 """
 from __future__ import annotations
 
@@ -105,6 +110,7 @@ def _get_or_create(conn: sqlite3.Connection, cache: dict[str, dict[str, Any]], p
         space = queries_spaces.create_space(
             conn, name=target_name, kind="manual", parent_id=parent_id, archive_kind=kind,
             target_name=target_name, commit=False, validate_name=validate_name,
+            source=schema.SPACE_SOURCE_IMPORT,
         )
         created.append(vpath)
     space["virtual_path"] = vpath
@@ -112,10 +118,63 @@ def _get_or_create(conn: sqlite3.Connection, cache: dict[str, dict[str, Any]], p
     return space
 
 
-def import_csv(conn: sqlite3.Connection, csv_path: Path, errors_path: Path, apply: bool) -> dict[str, Any]:
+def prune(conn: sqlite3.Connection, keep: set[tuple[int, int]],
+          keep_spaces: set[int]) -> tuple[list[str], list[str]]:
+    """Esborra els membres d'espais d'arxiu que no són a `keep` {(space_id, item_id)} i els
+    espais importats (source = 'import') que queden sense membres ni fills, de baix a dalt,
+    llevat dels que el CSV ha anomenat en aquesta importació (`keep_spaces`: un projecte sense
+    disc és un espai buit volgut). Retorna (membres esborrats, espais esborrats) com a text."""
+    rows = conn.execute(
+        """
+        SELECT m.space_id, m.item_id, t.drive_id, t.relative_path
+        FROM space_members m JOIN spaces s ON s.space_id = m.space_id JOIN items t ON t.item_id = m.item_id
+        WHERE s.archive_kind IS NOT NULL
+        """
+    ).fetchall()
+    members_out: list[str] = []
+    calc_paths: dict[int, str] = {}
+    for sid, in conn.execute("SELECT space_id FROM spaces WHERE archive_kind IS NOT NULL"):
+        chain = []
+        cur = sid
+        while cur is not None:
+            r = conn.execute("SELECT parent_id, archive_kind, target_name, name FROM spaces WHERE space_id = ?",
+                             (cur,)).fetchone()
+            if r is None or r["archive_kind"] is None:
+                break
+            chain.append(r["target_name"] or r["name"])
+            cur = r["parent_id"]
+        calc_paths[sid] = SEP.join(reversed(chain))
+    for r in rows:
+        if (r["space_id"], r["item_id"]) not in keep:
+            conn.execute("DELETE FROM space_members WHERE space_id = ? AND item_id = ?",
+                         (r["space_id"], r["item_id"]))
+            members_out.append(f"{calc_paths.get(r['space_id'], r['space_id'])}  ←  {r['drive_id']}\\{r['relative_path']}")
+    spaces_out: list[str] = []
+    while True:
+        empty = conn.execute(
+            """
+            SELECT s.space_id FROM spaces s
+            WHERE s.archive_kind IS NOT NULL AND s.source = ?
+              AND NOT EXISTS (SELECT 1 FROM space_members m WHERE m.space_id = s.space_id)
+              AND NOT EXISTS (SELECT 1 FROM spaces c WHERE c.parent_id = s.space_id)
+            """,
+            (schema.SPACE_SOURCE_IMPORT,),
+        ).fetchall()
+        todo = [sid for (sid,) in empty if sid not in keep_spaces]
+        if not todo:
+            break
+        for sid in todo:
+            conn.execute("DELETE FROM spaces WHERE space_id = ?", (sid,))
+            spaces_out.append(calc_paths.get(sid, str(sid)))
+    return members_out, spaces_out
+
+
+def import_csv(conn: sqlite3.Connection, csv_path: Path, errors_path: Path, apply: bool,
+               do_prune: bool = False) -> dict[str, Any]:
     """Crea (o actualitza) l'arbre fons › sèrie › projecte › capa i els membres del CSV.
 
-    Tot es fa dins d'una transacció: amb `apply` fals, o si hi ha cap error, es desfà."""
+    Tot es fa dins d'una transacció: amb `apply` fals, o si hi ha cap error, es desfà.
+    Amb `do_prune`, esborra el que ja no és al CSV (vegeu `prune`)."""
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f, delimiter=";")
         missing = [c for c in CSV_COLUMNS if c not in (reader.fieldnames or [])]
@@ -133,6 +192,9 @@ def import_csv(conn: sqlite3.Connection, csv_path: Path, errors_path: Path, appl
     created: list[str] = []
     members_added = members_updated = 0
     seen_members: Counter[tuple[int, str, str]] = Counter()
+    keep: set[tuple[int, int]] = set()
+    pruned_members: list[str] = []
+    pruned_spaces: list[str] = []
     conn.execute("BEGIN")
     try:
         for i, row in enumerate(rows, 2):
@@ -216,7 +278,12 @@ def import_csv(conn: sqlite3.Connection, csv_path: Path, errors_path: Path, appl
                 members_added += 1
             else:
                 members_updated += 1
+            if res["item_ids"]:
+                keep.add((target["space_id"], res["item_ids"][0]))
         n_errors = sum(1 for x in issues if x["nivell"] == "error")
+        if do_prune and not n_errors:
+            touched = {s["space_id"] for s in cache.values()}
+            pruned_members, pruned_spaces = prune(conn, keep, touched)
         if n_errors or not apply:
             conn.execute("ROLLBACK")
         else:
@@ -233,6 +300,7 @@ def import_csv(conn: sqlite3.Connection, csv_path: Path, errors_path: Path, appl
                 w.writerow([x[c] for c in cols])
     return {"rows": len(rows), "created": created, "members_added": members_added,
             "members_updated": members_updated, "issues": issues,
+            "pruned_members": pruned_members, "pruned_spaces": pruned_spaces, "prune": do_prune,
             "errors": sum(1 for x in issues if x["nivell"] == "error"),
             "warnings": sum(1 for x in issues if x["nivell"] == "avis"),
             "applied": apply and not any(x["nivell"] == "error" for x in issues)}
@@ -246,6 +314,12 @@ def print_import(res: dict[str, Any], errors_path: Path, apply: bool) -> None:
     if len(res["created"]) > 60:
         print(f"  … i {len(res['created']) - 60} més")
     print(f"Membres afegits: {res['members_added']} · actualitzats (ja hi eren): {res['members_updated']}")
+    if res.get("prune"):
+        print(f"Poda: {len(res['pruned_members'])} membres i {len(res['pruned_spaces'])} espais importats buits")
+        for v in res["pruned_members"][:40]:
+            print(f"  - membre {v}")
+        for v in res["pruned_spaces"][:40]:
+            print(f"  - espai  {v}")
     if res["issues"]:
         print(f"Incidències: {res['errors']} errors, {res['warnings']} avisos → {errors_path}")
         for x in res["issues"][:40]:
@@ -387,6 +461,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--import", dest="import_csv", type=Path, metavar="CSV",
                     help="Importa el CSV de conjunts (prova si no hi ha --apply)")
     ap.add_argument("--apply", action="store_true", help="Escriu de veritat (--import)")
+    ap.add_argument("--prune", action="store_true",
+                    help="Amb --import: esborra els membres que no són al CSV i els espais importats que queden buits")
     ap.add_argument("--errors", type=Path, default=None, help="CSV d'incidències (per defecte data/conjunts_errors.csv)")
     ap.add_argument("--tree", action="store_true", help="Arbre de destí amb totals")
     ap.add_argument("--root", default=None, help="Arrel de l'arbre (nom o ruta virtual)")
@@ -411,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.import_csv:
             errors_path = args.errors or (PROJECT_ROOT / "data" / "conjunts_errors.csv")
             t0 = time.time()
-            res = import_csv(conn, args.import_csv, errors_path, args.apply)
+            res = import_csv(conn, args.import_csv, errors_path, args.apply, do_prune=args.prune)
             print_import(res, errors_path, args.apply)
             print(f"({time.time() - t0:.1f} s)")
             if res["errors"]:

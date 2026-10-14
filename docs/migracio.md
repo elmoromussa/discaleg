@@ -6,13 +6,13 @@ classes d'anàlisi, el vocabulari, el catàleg (`tools/cataleg.py`) amb la impor
 (`--import`, `--build-projects`), el comprovador de rutes de Metashape (`tools/rutes_metashape.py`)
 i l'arxiu virtual (`tools/espais.py`, secció final). L'executor vindrà després.
 
-## Esquema v9, v10, v11 i v12
+## Esquema v9 a v13
 
 `python -m app.migrate` afegeix, sense tocar cap taula existent (v10: només la columna
 `psx_check.chunks_json`, detall per chunk del comprovador de rutes; v11: sis columnes a
 `candidates` amb els `.psx` de cada candidat i la mida de les seues `.files`, llegides de
-`psx_check`; v12: l'arxiu virtual i la clau de còpia `inventory.name_key`, vegeu la secció
-«Arxiu virtual»):
+`psx_check`; v12: l'arxiu virtual i la clau de còpia `inventory.name_key`; v13: `spaces.source`,
+vegeu la secció «Arxiu virtual»):
 
 - `inventory.analysis_class` (text, nul·lable): classe d'anàlisi de cada fitxer (cau; NULL = pendent).
 - `series`, `projects`, `candidates`, `candidate_review`, `project_sources`, `project_refs`,
@@ -420,8 +420,11 @@ el seu paper. Així es veu què va on, què és canònic i què és còpia, què
 final s'exporta a l'executor. No s'escriu a cap disc: només a `spaces`, `items` i
 `space_members`.
 
-### Esquema v12
+### Esquema v12 i v13
 
+- (v13) `spaces.source`: qui ha creat l'espai: `import` = `tools/espais.py --import` (i `--prune`
+  pot esborrar-lo si queda buit); NULL = creat a mà, a la interfície o abans de la v13: no es
+  toca mai.
 - `spaces.archive_kind` (`fons`, `serie`, `projecte`, `capa`, `carpeta`; NULL = espai normal),
   `target_name` (nom de la carpeta de destí: `ARXIU`, `diablo-wasi`, `2021_tambillo`, `RAW`…),
   `state` (`obert`, `en-tancament`, `tancat`) i `canonical_drive_id` (disc on viurà la sèrie o
@@ -517,8 +520,15 @@ l'inventari, paper o capa desconeguts, sèrie amb nom invàlid) van a `data/conj
 i no s'escriu res; els **avisos** (fila sense disc ni ruta: es crea l'espai sense membre; nom de
 projecte fora de la regla: es crea igualment; fila repetida) també van al CSV però no bloquegen.
 Sense `--apply` és una prova: fa tot el treball i el desfà. Una segona importació no crea res i
-actualitza paper, destí i nota dels membres que ja hi eren; no esborra membres que ja no són al
-CSV.
+actualitza paper, destí i nota dels membres que ja hi eren; per defecte no esborra res.
+
+Amb `--prune`, la DB queda com el CSV: els membres d'espais d'arxiu que no són al CSV
+s'esborren, i els espais creats per una importació (`source = 'import'`) que queden sense
+membres ni fills també, de baix a dalt (una capa buida, després el projecte buit), llevat dels
+que el CSV anomena en aquesta importació (un projecte sense disc és un espai buit volgut). Els
+espais creats a mà (`source` NULL) no es toquen mai, ni els seus pares. El cicle de treball
+mentre el CSV siga el punt de partida és: `--export` → corregir el CSV → `--import --prune`
+(prova) → `--import --prune --apply`.
 
 `--export` torna a escriure el CSV amb les mateixes columnes més `ruta_virtual` i
 `target_subpath`, amb `gb` i `unics` (% per disc) recalculats des de la DB.
@@ -537,3 +547,7 @@ CSV.
   `--export` 9 s, `--check` 3 errors (noms provisionals) i 79 avisos.
 - Servidor contra el banc: Còpies en mode nom+mida (únic, comparació, llista), Explorador, API
   d'espais, Duplicats i Cercar sense cap error.
+- `--prune` sobre la còpia real amb el CSV corregit (261 files): esborra els 4 membres i els 10
+  espais buits que ja no hi eren i conserva els 3 projectes sense disc; una segona passada no
+  canvia res; un espai creat a mà (`source` NULL) sobreviu a la poda. Resultat: 200 espais
+  d'arxiu, 258 membres, `--check` sense errors.

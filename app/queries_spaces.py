@@ -46,7 +46,7 @@ ARCHIVE_PARENTS: dict[str, tuple[str | None, ...]] = {
 # sense la carpeta d'origen pel mig».
 SUBPATH_ROOT = "."
 SPACE_COLUMNS = ("space_id, parent_id, name, kind, query_json, description, sort_order, "
-                 "created_utc, updated_utc, archive_kind, target_name, state, canonical_drive_id")
+                 "created_utc, updated_utc, archive_kind, target_name, state, canonical_drive_id, source")
 
 # Ordenació del contingut d'un espai (clau de la interfície -> columna de search_inventory)
 CONTENT_SORT_KEYS = {
@@ -285,6 +285,7 @@ def create_space(
     canonical_drive_id: str | None = None,
     commit: bool = True,
     validate_name: bool = True,
+    source: str | None = None,
 ) -> dict[str, Any]:
     if kind not in SPACE_KINDS:
         raise SpaceError(f"Tipus d'espai desconegut: {kind!r}")
@@ -298,14 +299,14 @@ def create_space(
     cur = conn.execute(
         """
         INSERT INTO spaces (parent_id, name, kind, query_json, description, sort_order, created_utc,
-                            archive_kind, target_name, state, canonical_drive_id)
+                            archive_kind, target_name, state, canonical_drive_id, source)
         VALUES (?, ?, ?, ?, ?,
                 COALESCE((SELECT MAX(sort_order) + 1 FROM spaces WHERE parent_id IS ?), 0), ?,
-                ?, ?, ?, ?)
+                ?, ?, ?, ?, ?)
         """,
         (parent_id, name, kind, _query_json(query, kind),
          (description or "").strip()[:DESCRIPTION_MAX] or None, parent_id, now,
-         archive_kind, target, state, (canonical_drive_id or "").strip() or None),
+         archive_kind, target, state, (canonical_drive_id or "").strip() or None, source or None),
     )
     if commit:
         conn.commit()
