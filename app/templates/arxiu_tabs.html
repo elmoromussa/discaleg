@@ -1,0 +1,15 @@
+<nav class="changes-tabs arxiu-tabs" aria-label="Seccions de l'arxiu">
+  <a href="{{ request.url_for('arxiu_route') }}" class="changes-tab{% if view == 'arbre' %} active{% endif %}" {% if view == 'arbre' %}aria-current="page"{% endif %}>Arbre de destí</a>
+  <a href="{{ request.url_for('arxiu_cobertura_route') }}" class="changes-tab{% if view == 'cobertura' %} active{% endif %}" {% if view == 'cobertura' %}aria-current="page"{% endif %}>Cobertura</a>
+  <a href="{{ request.url_for('arxiu_comprovacions_route') }}" class="changes-tab{% if view == 'comprovacions' %} active{% endif %}" {% if view == 'comprovacions' %}aria-current="page"{% endif %}>Comprovacions</a>
+  <span class="ax-actionsbar">
+    <button type="button" class="btn btn-sm" id="ax-undo" {% if not last_action %}disabled{% endif %} title="{% if last_action %}Desfés: {{ last_action.summary }}{% else %}No hi ha cap acció per desfer{% endif %}">Desfés</button>
+    <span id="ax-last" class="muted ax-last">{% if last_action %}{{ last_action.summary }}{% endif %}</span>
+    <button type="button" class="ax-link" id="ax-log-toggle" title="Darreres accions">registre</button>
+    <span id="ax-msg" class="ax-msg" hidden></span>
+  </span>
+</nav>
+<div id="ax-log" class="ax-log" hidden></div>
+<datalist id="ax-spaces"></datalist>
+<script type="application/json" id="ax-spaces-json">{{ spaces_json | safe }}</script>
+<script type="application/json" id="ax-config">{"api": "/api/arxiu", "roles": {{ roles | tojson }}, "kinds": {{ kinds | tojson }}, "parents": {{ archive_parents | tojson }}, "roleShort": {{ role_short | tojson }}}</script>

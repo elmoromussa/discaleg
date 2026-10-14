@@ -420,8 +420,12 @@ el seu paper. Així es veu què va on, què és canònic i què és còpia, què
 final s'exporta a l'executor. No s'escriu a cap disc: només a `spaces`, `items` i
 `space_members`.
 
-### Esquema v12 i v13
+### Esquema v12, v13 i v14
 
+- (v14) `arxiu_log`: registre de les accions fetes des de la interfície (afegir, canviar, treure o
+  moure membres; crear, canviar, moure, reordenar o esborrar espais): `utc`, `action`, `summary`,
+  `undo_json` (les operacions inverses: `member_set`, `member_del`, `space_set`, `space_insert`,
+  `space_del`) i `undone_utc`. «Desfés» aplica les inverses de la darrera acció no desfeta.
 - (v13) `spaces.source`: qui ha creat l'espai: `import` = `tools/espais.py --import` (i `--prune`
   pot esborrar-lo si queda buit); NULL = creat a mà, a la interfície o abans de la v13: no es
   toca mai.
@@ -533,8 +537,37 @@ mentre el CSV siga el punt de partida és: `--export` → corregir el CSV → `-
 `--export` torna a escriure el CSV amb les mateixes columnes més `ruta_virtual` i
 `target_subpath`, amb `gb` i `unics` (% per disc) recalculats des de la DB.
 
+### Interfície («Arxiu» al menú; `app/routes/arxiu.py`, `app/arxiu_cache.py`, `app/arxiu_actions.py`, `app/static/arxiu.js`)
+
+Tres pàgines sobre els mateixos càlculs: `/arxiu` (arbre de destí, `?arrel=ID` per a un subarbre,
+`?espai=ID` per desplegar fins a un espai, `?refresca=1` per recalcular), `/arxiu/cobertura`
+(`?disc=`, `&afegir=ruta` preselecciona una carpeta) i `/arxiu/comprovacions`. L'ús es descriu a
+`docs/usage.md`.
+
+- **Memòria cau** (`arxiu_cache`): una connexió dedicada de només lectura en mode autocommit (les
+  taules temporals no han d'obrir cap transacció, o la instantània WAL quedaria congelada) amb una
+  `ArxiuCalc`, protegida per un cadenat. Dos segells calculats a cada petició: el de l'inventari
+  (`drives.updated_utc`, canvia amb cada escaneig: es refà tot, uns 16 s amb la DB en memòria del
+  sistema) i el dels membres (empremta de `spaces` i de les pertinences dels espais d'arxiu). Un
+  canvi de paper, destí o nota recalcula només els totals de l'espai afectat i dels avantpassats
+  (dècimes de segon); afegir o treure membres recalcula només els segments, totals i fitxers ≥ 1 MiB
+  dels membres tocats (els nous, els trets i els veïns niats) i els totals dels espais afectats
+  (uns 4 s, la major part el fons sencer). Comprovat contra un càlcul des de zero.
+- **Accions** (`arxiu_actions`, API `/api/arxiu/…`): `POST /members` (afegir en bloc amb paper,
+  destí i nota), `PATCH`/`DELETE /members/{espai}/{element}`, `POST …/move`, `POST /spaces`,
+  `PATCH /spaces/{id}` (nom de destí, estat, disc, pare, descripció), `POST /spaces/{id}/reorder`,
+  `DELETE /spaces/{id}` (cascada), `POST /undo`, `GET /log`, `GET /spaces?q=`. Validen amb
+  `queries_spaces` (jerarquia, nomenclatura, paper, destí) i escriuen cada acció a `arxiu_log` amb
+  les inverses a la mateixa transacció.
+
 ### Verificació feta (14/10/2026)
 
+- Interfície (15/10): prova automàtica de l'API contra la còpia real (crear sèrie, projecte i
+  capa; rebutjar jerarquia i noms invàlids; afegir dues carpetes; canviar paper, destí i nota;
+  moure i treure un membre; reanomenar, canviar d'estat, reordenar i moure un espai; esborrar en
+  cascada; desfer les 13 accions): la DB torna exactament a l'estat inicial. Recàrrega incremental
+  igual al càlcul des de zero després d'afegir un membre solt i un de niat, i després de
+  treure'ls. Captures de les tres pàgines en clar, fosc i mòbil.
 - Migració v12 del banc (4 discs, 512 k fitxers) en 25 s i d'una còpia de la DB real (API de
   backup, 36 s) en 188 s més la comprovació d'integritat; `quick_check` ok a totes dues. Cap
   fila d'inventory sense `name_key`.

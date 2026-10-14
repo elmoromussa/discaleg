@@ -45,6 +45,16 @@ La pàgina **Còpies** respon dues preguntes. **Còpia única**: quins fitxers d
 
 ### Fitxa del disc
 
+## Arxiu virtual
+
+La secció **Arxiu** del menú munta l'arxiu de destí dins de la base de dades, sobre els espais virtuals, abans de moure cap fitxer (model a `docs/model-arxiu.md`, eines a `docs/migracio.md`). Tres pestanyes:
+
+- **Arbre de destí**: fons › sèrie › projecte › capa, amb un resum fix a dalt (mida, fitxers, únics i membres per paper de cada fons) i, a cada node, la mida, els **únics** (bytes dels membres canònica/part sense cap còpia fora de l'espai) i els membres per paper. El filtre de text, els xips de paper, el nivell de desplegament i l'estat de l'arbre es conserven entre pàgines. Clic al nom d'un espai mostra només aquell subarbre. A la taula de membres, **paper**, **destí** i **nota** es canvien en línia (clic a la cel·la, Retorn desa, Esc cancel·la); **mou** trasllada el membre a un altre espai (s'escriu el nom o la ruta) i **×** el treu. En passar per un node apareixen **+ fill** (crea un espai del tipus que toca, amb el nom validat), **✎** (nom de destí), **estat**, **mou**, **↑ ↓** (ordre) i **×** (esborra amb descendents i membres, amb confirmació).
+- **Cobertura**: per a cada disc, el que és dins d'algun espai (per paper, amb el % cobert) i el que queda **fora de tot espai**, per carpeta de nivell 1 i 2, amb l'any i el tipus dominants per decidir sense obrir-la. Les caselles seleccionen carpetes (Maj+clic per a un tram) i la barra **Afegeix a l'arxiu** les posa totes d'una vegada en un espai (nom o ruta, amb autocompleció) amb paper, destí i nota. Des de l'Explorador, el menú d'una carpeta té «Afegeix a l'arxiu virtual…», que obre la cobertura amb aquella carpeta ja seleccionada.
+- **Comprovacions**: els conflictes de l'arxiu virtual (noms fora de regla, carpeta en dos espais, niaments entre espais, papers contradictoris, projectes sense canònica, membres sense paper), amb enllaços a l'espai, l'explorador i la cobertura.
+
+Totes les accions queden en un registre (botó **registre**) i **Desfés** reverteix la darrera. Els càlculs es guarden en memòria al servidor: la primera obertura tarda uns segons (fins a un minut si la base de dades ve de disc fred), un canvi de paper o destí es nota en dècimes de segon i afegir o treure membres en uns segons.
+
 A cada targeta de **Discs**, **Edita la fitxa** desplega un formulari per indicar l'**etiqueta** (nom amb sentit per a tu), el **tipus** de suport (disc dur, SSD, NVMe, memòria USB, targeta SD, òptic, xarxa, altre), la **ubicació** física (on és guardat) i **notes** lliures. Aquestes dades es mostren a la targeta i al rètol del disc a l'Explorador. L'escaneig no les toca: només omple l'etiqueta amb la del volum si encara és buida.
 
 ### Què ha canviat entre escaneigs
@@ -65,6 +75,7 @@ El càlcul del SHA-256 per fitxer es fa amb `python tools/hash_files.py` (vegeu 
 | **Extensions** | Estadístiques per extensió (paginat). |
 | **Carpetes** | Llistat de carpetes per mida (paginat). |
 | **Explorador** | Arbre de carpetes i fitxers des de la DB (sense accés al sistema de fitxers) i panell d'espais virtuals (cerques desades). Clic dret, botó ⋯ o Maj+F10 sobre un element: cerca dins la carpeta, exportació a CSV, còpies d'un fitxer, copiar la ruta. |
+| **Arxiu** | Arxiu virtual: arbre de destí amb totals per paper i únics, cobertura de cada disc amb afegir en bloc, comprovacions, edició en línia i desfer. |
 | **Còpies** | Fitxers amb còpia única (per disc o carpeta, amb resum de tots els discs) i comparació «tot el que hi ha a A és també a B?». Per contingut (hash) o, mentre no n'hi hagi, per nom i mida. |
 | **Discs** | Auditar i incorporar o actualitzar discs; fitxa de cada disc (etiqueta, tipus, ubicació, notes); vista «Canvis» per escaneig. |
 

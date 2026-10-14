@@ -79,6 +79,7 @@ L’aplicació pot arrencar **sense cap fitxer de base de dades**. En aquest cas
 | `/extensions` | Llistat d'estadístiques per extensió (paginat) |
 | `/folders` | Llistat de carpetes per mida (paginat) |
 | `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre + contingut, totals per carpeta, ruta copiable; `?drive=&path=` obre una carpeta directament) |
+| `/arxiu`, `/arxiu/cobertura`, `/arxiu/comprovacions` | Arxiu virtual: arbre de destí (fons › sèrie › projecte › capa) amb totals per paper i únics, edició en línia i desfer; cobertura de cada disc (què no és en cap espai, amb afegir en bloc); conflictes. Vegeu `docs/migracio.md` |
 | `/discs` | Gestió de discs: escanejar i incorporar o actualitzar un disc (en segon pla, amb progrés) |
 | `/api/scan/status` | Estat JSON de l'escaneig en segon pla |
 | `/health` | Comprova si la DB existeix (retorn JSON) |
@@ -93,7 +94,8 @@ El fitxer `.gitignore` exclou `data/`, `venv/`, `*.db` i `.env`, de manera que e
 
 ## Notes
 
-- La base de dades es **llegeix** des de Cercar, Duplicats, Extensions, Carpetes i Explorador; es **escriu** des de **Discs** (escaneig directe o import des de carpeta d’audit en CSV) i des de `tools/hash_files.py`.
+- La base de dades es **llegeix** des de Cercar, Duplicats, Extensions, Carpetes i Explorador; es **escriu** des de **Discs** (escaneig directe o import des de carpeta d’audit en CSV), des de `tools/hash_files.py` i, a les taules dels espais virtuals, des d'**Arxiu** i dels espais de l'Explorador.
+- Les mides es mostren en unitats decimals (1 TB = 10^12 bytes), com els fabricants de discs i la documentació del projecte.
 - Esquema versió 13 (`PRAGMA user_version`): taules `drives` (fitxa, maquinari, exclusions i comptadors per disc), `scans` (historial d'escaneigs amb el maquinari vist), `scan_changes` (detall de cada escaneig), `read_errors` (carpetes i fitxers il·legibles), columnes de hash, seguiment, data de creació, atributs, classe d'anàlisi i clau de còpia (`name_key`) a `inventory`, les taules dels espais virtuals (amb l'arxiu virtual: tipus d'espai d'arxiu, nom de destí, paper i destí de cada membre) i les de la migració a l'arxiu (`candidates`, `candidate_review`, `series`, `projects`, `events`…). `folder_path` és relatiu a l'arrel escanejada i els fitxers sense extensió tenen `(no_ext)`. Les DB antigues es migren amb `python -m app.migrate` (vegeu `PROJECT_OVERVIEW.md`).
 - Les cerques i llistats grans fan servir **paginació** per no sobrecarregar la memòria.
 - Si la DB no existeix, les rutes que la requereixen retornen error 503; la pàgina d’inici i **Discs** es carreguen sense DB.

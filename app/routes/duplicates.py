@@ -126,12 +126,12 @@ def duplicates_page(
     except ValueError:
         min_size_folders_mb = None
     min_size_folders_bytes = (
-        int(min_size_folders_mb * 1024 * 1024)
+        int(min_size_folders_mb * 1000 * 1000)
         if min_size_folders_mb is not None and min_size_folders_mb > 0
         else 0
     )
     min_size_bytes = (
-        int(min_size_mb * 1024 * 1024)
+        int(min_size_mb * 1000 * 1000)
         if min_size_mb is not None and min_size_mb > 0
         else 0
     )

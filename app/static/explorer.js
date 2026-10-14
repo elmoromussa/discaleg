@@ -125,10 +125,10 @@
   function fmtBytes(bytes) {
     if (bytes == null || bytes === '') return '';
     var n = Number(bytes);
-    if (Math.abs(n) < 1024) return fmtInt(n) + ' B';
-    var units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+    if (Math.abs(n) < 1000) return fmtInt(n) + ' B';
+    var units = ['kB', 'MB', 'GB', 'TB', 'PB'];  // unitats decimals, com els discs
     var i = -1;
-    do { n /= 1024; i++; } while (Math.abs(n) >= 1024 && i < units.length - 1);
+    do { n /= 1000; i++; } while (Math.abs(n) >= 1000 && i < units.length - 1);
     return nf1.format(n) + ' ' + units[i];
   }
 
@@ -987,6 +987,10 @@
     items.push({ sep: true });
     items.push({ label: 'Afegeix a una col·lecció o etiqueta…', icon: 'i-plus',
       action: function () { openAddDialog([{ kind: 'folder', drive: drive, path: path, name: opts && opts.name ? opts.name : (baseName(path) || drive) }]); } });
+    if (path) {
+      items.push({ label: 'Afegeix a l’arxiu virtual…', icon: 'i-space',
+        href: '/arxiu/cobertura?' + qs({ disc: drive, afegir: path }) });
+    }
     items.push({ sep: true });
     items.push({ label: 'Copia la ruta', icon: 'i-copy', action: function () { copyText(nativePathOf(path, drive)); } });
     return items;

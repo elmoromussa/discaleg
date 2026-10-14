@@ -47,6 +47,9 @@ Versió (PRAGMA user_version):
          tarda minuts amb milions de files (omplir la columna i construir l'índex).
   13   + spaces.source: qui ha creat l'espai ('import' = tools/espais.py --import, que amb
          --prune pot esborrar-lo si queda buit; NULL = creat a mà, no es toca mai). Una columna.
+  14   + arxiu_log: registre de les accions fetes a l'arxiu virtual des de la interfície
+         (afegir, canviar, treure o moure membres; crear, canviar, moure, reordenar o esborrar
+         espais) amb les operacions inverses en JSON per a «desfer». Una taula.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -60,7 +63,7 @@ import unicodedata
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # Origen d'un espai (spaces.source): 'import' = creat per tools/espais.py --import (i
 # esborrable per --prune si queda buit); NULL = creat a mà (no es toca mai).
@@ -75,6 +78,10 @@ MEMBER_ROLES: tuple[str, ...] = ("canonica", "copia", "part", "descartar", "quar
 # Clau de còpia: fitxers ≥ 1 MiB amb el mateix name_key i la mateixa mida (els més menuts
 # compten com a únics). Mateix criteri que tools/cataleg.py.
 COPY_MIN_SIZE = 1_048_576
+
+# Versions que creen o canvien índexs d'inventory: només després d'aquestes cal ANALYZE
+# (sobre 7 M de files tarda més d'un minut; una taula nova no ho necessita).
+ANALYZE_VERSIONS = frozenset({2, 3, 4, 5, 6, 12})
 
 
 def name_key(name: str) -> str:
@@ -706,6 +713,23 @@ def _apply_v13(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
+# v14: registre d'accions de l'arxiu virtual (interfície), amb les operacions inverses.
+_DDL_V14 = """
+CREATE TABLE IF NOT EXISTS arxiu_log (
+    log_id     INTEGER PRIMARY KEY,
+    utc        TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    summary    TEXT NOT NULL,
+    undo_json  TEXT NOT NULL,
+    undone_utc TEXT
+);
+"""
+
+
+def _apply_v14(conn: sqlite3.Connection) -> None:
+    _exec_statements(conn, _DDL_V14)
+
+
 def _apply_v11(conn: sqlite3.Connection) -> list[str]:
     """Columnes de la v11 (idempotent). Retorna les columnes afegides."""
     added: list[str] = []
@@ -763,6 +787,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _apply_v11(conn)
         _apply_v12(conn)
         _apply_v13(conn)
+        _apply_v14(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -815,8 +840,11 @@ def migrate(
         _migrate_to_v12(conn, log)
     if get_user_version(conn) < 13:
         _migrate_to_v13(conn, log)
-    log("  ANALYZE…")
-    conn.execute("ANALYZE")
+    if get_user_version(conn) < 14:
+        _migrate_to_v14(conn, log)
+    if any(v in ANALYZE_VERSIONS for v in range(version + 1, SCHEMA_VERSION + 1)):
+        log("  ANALYZE…")
+        conn.execute("ANALYZE")
     conn.commit()
     log(f"Migració completada (versió {get_user_version(conn)}).")
     return True
@@ -1113,6 +1141,19 @@ def _migrate_to_v13(conn: sqlite3.Connection, log: Callable[[str], None]) -> Non
         conn.execute("ROLLBACK")
         raise
     log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}")
+
+
+def _migrate_to_v14(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 14 (arxiu_log: registre d'accions de l'arxiu virtual)…")
+    conn.execute("BEGIN")
+    try:
+        _apply_v14(conn)
+        conn.execute("PRAGMA user_version = 14")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log("  taula arxiu_log creada")
 
 
 def refresh_drive_counters(

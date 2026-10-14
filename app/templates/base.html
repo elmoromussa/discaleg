@@ -21,6 +21,7 @@
             <li><a href="{{ request.url_for('extensions_route') }}" class="{% if request.url.path == '/extensions' %}active{% endif %}">Extensions</a></li>
             <li><a href="{{ request.url_for('folders_route') }}" class="{% if request.url.path == '/folders' %}active{% endif %}">Carpetes</a></li>
             <li><a href="{{ request.url_for('explorador_route') }}" class="{% if request.url.path == '/explorador' %}active{% endif %}">Explorador</a></li>
+            <li><a href="{{ request.url_for('arxiu_route') }}" class="{% if request.url.path.startswith('/arxiu') %}active{% endif %}">Arxiu</a></li>
             <li><a href="{{ request.url_for('discs_route') }}" class="{% if request.url.path == '/discs' %}active{% endif %}">Discs</a></li>
           </ul>
         </nav>

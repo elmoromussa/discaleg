@@ -15,13 +15,16 @@ from app.db import get_db
 from app.routes import dashboard, discs, duplicates, extensions, explorer, folders, search
 
 def _format_bytes(value: int | None) -> str:
+    """Unitats decimals (1 TB = 10^12 B), com els discs i la documentació del projecte."""
     if value is None:
         return ""
-    for u in ("B", "KB", "MB", "GB", "TB"):
-        if abs(value) < 1024:
+    if abs(value) < 1000:
+        return f"{value} B"
+    for u in ("kB", "MB", "GB", "TB"):
+        value /= 1000
+        if abs(value) < 1000:
             return f"{value:.1f} {u}"
-        value /= 1024
-    return f"{value:.1f} PB"
+    return f"{value / 1000:.2f} PB"
 
 
 app = FastAPI(title="Discàleg", description="Inventari de discs — consulta i visualització de arxiu_discs.db")
@@ -117,6 +120,112 @@ def copies_route(request: Request, conn: sqlite3.Connection = Depends(get_db)):
     """Informes de còpies: còpia única per disc i comparació entre discs."""
     from app.routes import copies
     return copies.copies_page(request, templates, conn)
+
+
+@app.get("/arxiu", name="arxiu_route")
+def arxiu_route(request: Request, refresca: int = 0, arrel: int = 0, conn: sqlite3.Connection = Depends(get_db)):
+    """Arxiu virtual: arbre de destí amb totals per paper i únics (`arrel` = només un subarbre)."""
+    from app.routes import arxiu
+    return arxiu.arbre_page(request, templates, conn, force=bool(refresca), root=arrel or None)
+
+
+@app.get("/arxiu/cobertura", name="arxiu_cobertura_route")
+def arxiu_cobertura_route(request: Request, disc: str = "", conn: sqlite3.Connection = Depends(get_db)):
+    """Què queda de cada disc fora de tot espai d'arxiu."""
+    from app.routes import arxiu
+    return arxiu.cobertura_page(request, templates, conn, disc.strip())
+
+
+@app.get("/arxiu/comprovacions", name="arxiu_comprovacions_route")
+def arxiu_comprovacions_route(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Conflictes de l'arxiu virtual."""
+    from app.routes import arxiu
+    return arxiu.comprovacions_page(request, templates, conn)
+
+
+@app.get("/api/arxiu/tree")
+def api_arxiu_tree(refresca: int = 0, conn: sqlite3.Connection = Depends(get_db)):
+    """Arbre de destí (JSON): espais d'arxiu amb totals recursius i membres amb ruta final."""
+    from app.routes import arxiu
+    return arxiu.api_tree(force=bool(refresca))
+
+
+@app.get("/api/arxiu/spaces")
+def api_arxiu_spaces(q: str = "", conn: sqlite3.Connection = Depends(get_db)):
+    """Espais d'arxiu per als selectors (id, ruta virtual, tipus)."""
+    from app.routes import arxiu
+    return arxiu.api_spaces(q)
+
+
+@app.post("/api/arxiu/members")
+async def api_arxiu_add_members(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Afegeix elements a un espai d'arxiu amb paper i destí: {space_id, items, role?, target_subpath?, note?}."""
+    from app.routes import arxiu
+    return await arxiu.api_add_members(request, conn)
+
+
+@app.patch("/api/arxiu/members/{space_id}/{item_id}")
+async def api_arxiu_update_member(space_id: int, item_id: int, request: Request,
+                                  conn: sqlite3.Connection = Depends(get_db)):
+    """Canvia paper, destí o nota d'un membre: {role?, target_subpath?, note?}."""
+    from app.routes import arxiu
+    return await arxiu.api_update_member(request, conn, space_id, item_id)
+
+
+@app.delete("/api/arxiu/members/{space_id}/{item_id}")
+def api_arxiu_remove_member(space_id: int, item_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    from app.routes import arxiu
+    return arxiu.api_remove_member(conn, space_id, item_id)
+
+
+@app.post("/api/arxiu/members/{space_id}/{item_id}/move")
+async def api_arxiu_move_member(space_id: int, item_id: int, request: Request,
+                                conn: sqlite3.Connection = Depends(get_db)):
+    """Trasllada un membre a un altre espai d'arxiu: {to_space_id}."""
+    from app.routes import arxiu
+    return await arxiu.api_move_member(request, conn, space_id, item_id)
+
+
+@app.post("/api/arxiu/spaces")
+async def api_arxiu_create_space(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Crea un espai d'arxiu: {parent_id?, archive_kind, target_name, state?, canonical_drive_id?}."""
+    from app.routes import arxiu
+    return await arxiu.api_create_space(request, conn)
+
+
+@app.patch("/api/arxiu/spaces/{space_id}")
+async def api_arxiu_update_space(space_id: int, request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Canvia nom de destí, estat, disc, pare o descripció d'un espai d'arxiu."""
+    from app.routes import arxiu
+    return await arxiu.api_update_space(request, conn, space_id)
+
+
+@app.post("/api/arxiu/spaces/{space_id}/reorder")
+async def api_arxiu_reorder_space(space_id: int, request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Puja o baixa un espai entre els seus germans: {direction: -1|1}."""
+    from app.routes import arxiu
+    return await arxiu.api_reorder_space(request, conn, space_id)
+
+
+@app.delete("/api/arxiu/spaces/{space_id}")
+def api_arxiu_delete_space(space_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    """Esborra un espai d'arxiu amb els descendents i els membres (es pot desfer)."""
+    from app.routes import arxiu
+    return arxiu.api_delete_space(conn, space_id)
+
+
+@app.post("/api/arxiu/undo")
+def api_arxiu_undo(conn: sqlite3.Connection = Depends(get_db)):
+    """Desfà la darrera acció de l'arxiu virtual."""
+    from app.routes import arxiu
+    return arxiu.api_undo(conn)
+
+
+@app.get("/api/arxiu/log")
+def api_arxiu_log(limit: int = 20, conn: sqlite3.Connection = Depends(get_db)):
+    """Darreres accions de l'arxiu virtual."""
+    from app.routes import arxiu
+    return arxiu.api_log(conn, limit)
 
 
 @app.get("/api/explorer/roots")

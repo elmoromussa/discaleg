@@ -28,7 +28,7 @@ totes les crides; les funcions de mòdul en creen un per comoditat.
 from __future__ import annotations
 
 import sqlite3
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any
 
 from app import queries_spaces
@@ -81,7 +81,77 @@ class ArxiuCalc:
         self._totals: dict[int, dict[str, int]] | None = None
         self._mf = False
         self._keys = False
+        self._item_unique: dict[int, dict[str, int]] | None = None
+        self._space_cache: dict[int, dict[str, Any]] = {}   # space_totals recursius per espai
+        self._space_sig: dict[int, tuple] = {}
         self._load()
+        self._space_sig = self._signature()[1]
+
+    def _signature(self) -> tuple[frozenset, dict[int, tuple]]:
+        """(conjunt d'items membres, signatura dels membres i del pare de cada espai)."""
+        items = frozenset(self.items)
+        sig: dict[int, tuple] = {}
+        for sid, s in self.spaces.items():
+            ms = tuple(sorted((m["item_id"], m["role"] or "", m["target_subpath"] or "")
+                              for m in self.members if m["space_id"] == sid))
+            sig[sid] = (s["parent_id"], s["archive_kind"], ms)
+        return items, sig
+
+    def reload_members(self) -> None:
+        """Torna a llegir espais i membres. Si el conjunt de carpetes i fitxers membres no ha
+        canviat, conserva segments, totals per membre i claus; invalida només els totals dels
+        espais amb membres o pare canviats i dels seus avantpassats."""
+        old_items = frozenset(self.items)
+        old_sig = self._space_sig
+        old_item_spaces = {iid: {m["space_id"] for m in ms} for iid, ms in self.item_members.items()}
+        old_segs = dict(getattr(self, "_seg_by_item", {})) if self._segments else None
+        self.spaces, self.all_spaces, self.roots = {}, {}, []
+        self.members, self.items = [], {}
+        self.item_members = defaultdict(list)
+        self._load()
+        new_items, new_sig = self._signature()
+        self._space_sig = new_sig
+        self._cov_cache = {}
+        changed = {sid for sid in set(old_sig) | set(new_sig) if old_sig.get(sid) != new_sig.get(sid)}
+        if new_items != old_items:
+            if old_segs is None or not self._mf or self._totals is None or self._item_unique is None:
+                self._segments = False
+                self._totals = None
+                self._mf = False
+                self._item_unique = None
+                self.item_parent = {}
+                self._space_cache.clear()
+                return
+            # incremental: només els membres amb segments diferents (nous, trets i veïns niats)
+            self._segments = False
+            self.item_parent = {}
+            self._build_segments()
+            touched = {i for i in set(old_segs) | set(self._seg_by_item)
+                       if old_segs.get(i) != self._seg_by_item.get(i)}
+            touched |= set(old_item_spaces) - new_items
+            ids = sorted(touched)
+            if ids:
+                ph = ",".join("?" * len(ids))
+                self.conn.execute(f"DELETE FROM temp.arxiu_mf WHERE item_id IN ({ph})", ids)
+                alive = [i for i in ids if i in self.items]
+                if alive:
+                    self._mf_insert(alive)
+                self.conn.commit()
+                for i in ids:
+                    self._totals.pop(i, None)
+                    self._item_unique.pop(i, None)
+                if alive:
+                    self._totals.update(self._totals_for(alive))
+                    self._item_unique.update(self._unique_for(alive))
+                for i in ids:
+                    changed |= old_item_spaces.get(i, set())
+                    changed |= {m["space_id"] for m in self.item_members.get(i, [])}
+        for sid in list(changed):
+            cur = self.spaces.get(sid)
+            while cur is not None:
+                self._space_cache.pop(cur["space_id"], None)
+                cur = self.spaces.get(cur["parent_id"]) if cur["parent_id"] is not None else None
+            self._space_cache.pop(sid, None)
 
     # ------------------------------------------------------------------ càrrega
     def _load(self) -> None:
@@ -148,6 +218,7 @@ class ArxiuCalc:
         if self._segments:
             return
         c = self.conn
+        self._seg_by_item: dict[int, list[tuple[str, str]]] = defaultdict(list)
         c.execute("DROP TABLE IF EXISTS temp.arxiu_seg")
         c.execute("DROP TABLE IF EXISTS temp.arxiu_exact")
         c.execute("DROP TABLE IF EXISTS temp.arxiu_file")
@@ -196,19 +267,35 @@ class ArxiuCalc:
                     cur = max(cur, chi)
                 if cur < hi:
                     seg_rows.append((it["item_id"], drive_id, cur, hi))
+        for item_id, _d, lo, hi in seg_rows:
+            self._seg_by_item[item_id].append((lo, hi))
+        self._file_parent = {r[0]: r[3] for r in file_rows}
         c.executemany("INSERT INTO temp.arxiu_seg VALUES (?, ?, ?, ?)", seg_rows)
         c.executemany("INSERT OR IGNORE INTO temp.arxiu_exact VALUES (?, ?, ?)", exact_rows)
         c.executemany("INSERT INTO temp.arxiu_file VALUES (?, ?, ?, ?)", file_rows)
+        c.commit()  # tanca la transacció implícita (si n'hi ha): la connexió no ha de congelar la instantània
         self._segments = True
+
+    @staticmethod
+    def _in(item_ids: list[int] | None, col: str) -> tuple[str, list[int]]:
+        if item_ids is None:
+            return "", []
+        return f" AND {col} IN ({','.join('?' * len(item_ids))})", list(item_ids)
 
     # ------------------------------------------------------------------ totals per membre
     def item_totals(self) -> dict[int, dict[str, int]]:
         """{item_id: {files, bytes}} dels fitxers vius que pertanyen a cada membre (el més profund)."""
-        if self._totals is not None:
-            return self._totals
-        self._build_segments()
+        if self._totals is None:
+            self._build_segments()
+            self._totals = self._totals_for(None)
+        return self._totals
+
+    def _totals_for(self, item_ids: list[int] | None) -> dict[int, dict[str, int]]:
+        """Totals (folder_stats sobre els segments) de tots els membres o només d'alguns."""
         c = self.conn
-        totals: dict[int, dict[str, int]] = {i: {"files": 0, "bytes": 0} for i in self.items}
+        ids = list(self.items) if item_ids is None else list(item_ids)
+        totals: dict[int, dict[str, int]] = {i: {"files": 0, "bytes": 0} for i in ids}
+        cond, params = self._in(item_ids, "s.item_id")
         rows = c.execute(
             f"""
             SELECT s.item_id, SUM(f.files_count), SUM(f.total_bytes)
@@ -216,23 +303,26 @@ class ArxiuCalc:
             CROSS JOIN folder_stats f INDEXED BY {FOLDER_INDEX}
                  ON f.drive_id = s.drive_id AND f.folder_path >= s.lo AND f.folder_path < s.hi
             WHERE NOT EXISTS (SELECT 1 FROM temp.arxiu_exact e
-                              WHERE e.drive_id = f.drive_id AND e.folder_path = f.folder_path)
+                              WHERE e.drive_id = f.drive_id AND e.folder_path = f.folder_path){cond}
             GROUP BY s.item_id
-            """
+            """, params,
         ).fetchall()
         for item_id, files, nbytes in rows:
             totals[item_id]["files"] += int(files or 0)
             totals[item_id]["bytes"] += int(nbytes or 0)
+        cond, params = self._in(item_ids, "e.item_id")
         rows = c.execute(
-            """
+            f"""
             SELECT e.item_id, f.files_count, f.total_bytes
             FROM temp.arxiu_exact e JOIN folder_stats f
                  ON f.drive_id = e.drive_id AND f.folder_path = e.folder_path
-            """
+            WHERE 1 = 1{cond}
+            """, params,
         ).fetchall()
         for item_id, files, nbytes in rows:
             totals[item_id]["files"] += int(files or 0)
             totals[item_id]["bytes"] += int(nbytes or 0)
+        # fitxers membres: compten per a ells i es descompten del membre carpeta que els conté
         rows = c.execute(
             """
             SELECT a.item_id, a.parent_item, i.size_bytes
@@ -242,12 +332,12 @@ class ArxiuCalc:
             """
         ).fetchall()
         for item_id, parent, size in rows:
-            totals[item_id]["files"] += 1
-            totals[item_id]["bytes"] += int(size or 0)
+            if item_id in totals:
+                totals[item_id]["files"] += 1
+                totals[item_id]["bytes"] += int(size or 0)
             if parent is not None and parent in totals:
                 totals[parent]["files"] -= 1
                 totals[parent]["bytes"] -= int(size or 0)
-        self._totals = totals
         return totals
 
     # ------------------------------------------------------------------ fitxers ≥ 1 MiB i claus
@@ -259,20 +349,26 @@ class ArxiuCalc:
         c.execute("DROP TABLE IF EXISTS temp.arxiu_mf")
         c.execute("CREATE TEMP TABLE arxiu_mf (item_id INTEGER, id INTEGER, name_key TEXT, "
                   "size_bytes INTEGER, drive_id TEXT)")
-        c.execute(
+        self._mf_insert(None)
+        c.execute("CREATE INDEX temp.ix_arxiu_mf_key ON arxiu_mf(name_key, size_bytes)")
+        c.execute("CREATE INDEX temp.ix_arxiu_mf_item ON arxiu_mf(item_id)")
+        c.commit()
+        self._mf = True
+
+    def _mf_insert(self, item_ids: list[int] | None) -> None:
+        """Fitxers ≥ 1 MiB dels segments de tots els membres, o només d'alguns."""
+        cond, params = self._in(item_ids, "s.item_id")
+        self.conn.execute(
             f"""
             INSERT INTO temp.arxiu_mf
             SELECT s.item_id, i.id, i.name_key, i.size_bytes, i.drive_id
             FROM temp.arxiu_seg s
             CROSS JOIN inventory i INDEXED BY {PATH_INDEX}
                  ON i.drive_id = s.drive_id AND i.relative_path >= s.lo AND i.relative_path < s.hi
-            WHERE i.missing_since_utc IS NULL AND i.size_bytes >= ?
+            WHERE i.missing_since_utc IS NULL AND i.size_bytes >= ?{cond}
             """,
-            (COPY_MIN_SIZE,),
+            [COPY_MIN_SIZE] + params,
         )
-        c.execute("CREATE INDEX temp.ix_arxiu_mf_key ON arxiu_mf(name_key, size_bytes)")
-        c.execute("CREATE INDEX temp.ix_arxiu_mf_item ON arxiu_mf(item_id)")
-        self._mf = True
 
     def _build_keys(self) -> None:
         if self._keys:
@@ -291,35 +387,49 @@ class ArxiuCalc:
             """,
             (COPY_MIN_SIZE,),
         )
+        c.commit()
         self._keys = True
 
     def item_unique(self) -> dict[int, dict[str, int]]:
         """Per membre: fitxers i bytes ≥ 1 MiB, i bytes ≥ 1 MiB sense còpia en cap altre disc
         (criteri del catàleg, per disc). Es desa a la instància."""
-        if getattr(self, "_item_unique", None) is not None:
-            return self._item_unique  # type: ignore[return-value]
-        self._build_member_files()
-        self._build_keys()
-        out: dict[int, dict[str, int]] = {i: {"big_files": 0, "big_bytes": 0, "drive_unique_bytes": 0}
-                                          for i in self.items}
+        if self._item_unique is None:
+            self._build_member_files()
+            self._build_keys()
+            self._item_unique = self._unique_for(None)
+        return self._item_unique
+
+    def _unique_for(self, item_ids: list[int] | None) -> dict[int, dict[str, int]]:
+        ids = list(self.items) if item_ids is None else list(item_ids)
+        out: dict[int, dict[str, int]] = {i: {"big_files": 0, "big_bytes": 0, "drive_unique_bytes": 0} for i in ids}
+        cond, params = self._in(item_ids, "item_id")
         for item_id, n, b in self.conn.execute(
-                "SELECT item_id, COUNT(*), SUM(size_bytes) FROM temp.arxiu_mf GROUP BY item_id"):
+                f"SELECT item_id, COUNT(*), SUM(size_bytes) FROM temp.arxiu_mf WHERE 1 = 1{cond} GROUP BY item_id",
+                params):
             out[item_id]["big_files"] = int(n)
             out[item_id]["big_bytes"] = int(b)
+        cond, params = self._in(item_ids, "f.item_id")
         for item_id, b in self.conn.execute(
-                """
+                f"""
                 SELECT f.item_id, SUM(f.size_bytes)
                 FROM temp.arxiu_mf f JOIN temp.arxiu_keys k
                      ON k.name_key = f.name_key AND k.size_bytes = f.size_bytes
-                WHERE k.d1 = k.d2
+                WHERE k.d1 = k.d2{cond}
                 GROUP BY f.item_id
-                """):
+                """, params):
             out[item_id]["drive_unique_bytes"] = int(b or 0)
-        self._item_unique = out
         return out
 
     # ------------------------------------------------------------------ totals d'un espai
     def space_totals(self, space_id: int, recursive: bool = True) -> dict[str, Any]:
+        if recursive and space_id in self._space_cache:
+            return self._space_cache[space_id]
+        out = self._space_totals(space_id, recursive)
+        if recursive:
+            self._space_cache[space_id] = out
+        return out
+
+    def _space_totals(self, space_id: int, recursive: bool) -> dict[str, Any]:
         ids = self.subtree(space_id) if recursive else [space_id]
         id_set = set(ids)
         totals = self.item_totals()
@@ -416,9 +526,63 @@ class ArxiuCalc:
         return [node(r) for r in roots]
 
     # ------------------------------------------------------------------ cobertura
-    def coverage(self, drive_id: str) -> dict[str, Any]:
+    def coverage_details(self, drive_id: str, gaps: list[tuple[str, str | None]]) -> dict[tuple[str, str], dict[str, Any]]:
+        """Per carpeta de nivell 1 i 2 fora de tot espai: any dominant (per nombre de fitxers,
+        data de modificació) i classe d'anàlisi dominant (per bytes). Una passada per les files
+        d'inventory dels forats (índex únic + accés a la fila)."""
+        c = self.conn
+        sql = r"""
+            SELECT l1, l2, substr(modified_utc, 1, 4) AS y, analysis_class AS cls, COUNT(*), SUM(size_bytes)
+            FROM (SELECT CASE WHEN instr(relative_path, '\') = 0 THEN ''
+                              ELSE substr(relative_path, 1, instr(relative_path, '\') - 1) END AS l1,
+                         CASE WHEN instr(relative_path, '\') = 0 THEN ''
+                              WHEN instr(substr(relative_path, instr(relative_path, '\') + 1), '\') = 0 THEN ''
+                              ELSE substr(substr(relative_path, instr(relative_path, '\') + 1), 1,
+                                          instr(substr(relative_path, instr(relative_path, '\') + 1), '\') - 1)
+                         END AS l2,
+                         modified_utc, analysis_class, size_bytes
+                  FROM inventory INDEXED BY {idx}
+                  WHERE drive_id = ? AND relative_path >= ? {upper} AND missing_since_utc IS NULL)
+            GROUP BY l1, l2, y, cls
+        """
+        years: dict[tuple[str, str], Counter] = defaultdict(Counter)
+        classes: dict[tuple[str, str], Counter] = defaultdict(Counter)
+        for lo, hi in gaps:
+            if hi is not None and lo >= hi:
+                continue
+            q = sql.format(idx=PATH_INDEX, upper="AND relative_path < ?" if hi is not None else "")
+            params: list[Any] = [drive_id, lo] + ([hi] if hi is not None else [])
+            for l1, l2, y, cls, n, b in c.execute(q, params):
+                years[(l1, l2)][y or "?"] += int(n)
+                classes[(l1, l2)][cls or "?"] += int(b or 0)
+        out: dict[tuple[str, str], dict[str, Any]] = {}
+        for key in set(years) | set(classes):
+            out[key] = {"years": years[key], "classes": classes[key]}
+        return out
+
+    @staticmethod
+    def _dominant(counter: Counter) -> tuple[str, float]:
+        total = sum(counter.values())
+        if not total:
+            return "", 0.0
+        k, v = counter.most_common(1)[0]
+        return k, 100.0 * v / total
+
+    def coverage(self, drive_id: str, details: bool = False) -> dict[str, Any]:
         """Què queda del disc fora de tot espai d'arxiu, per carpeta de nivell 1 i 2, i el
-        total cobert per paper."""
+        total cobert per paper. Amb `details`, any i classe dominants de cada carpeta.
+        Es desa per disc fins al proper canvi de membres (`reload_members`)."""
+        key = (drive_id, details)
+        cache = getattr(self, "_cov_cache", None)
+        if cache is None:
+            cache = self._cov_cache = {}
+        if key in cache:
+            return cache[key]
+        out = self._coverage(drive_id, details)
+        cache[key] = out
+        return out
+
+    def _coverage(self, drive_id: str, details: bool) -> dict[str, Any]:
         self._build_segments()
         totals = self.item_totals()
         c = self.conn
@@ -499,12 +663,25 @@ class ArxiuCalc:
         rows = [{"level1": l1, "level2": l2, "files": g["files"], "bytes": g["bytes"]}
                 for (l1, l2), g in groups.items() if g["files"] > 0 or g["bytes"] > 0]
         rows.sort(key=lambda r: (-r["bytes"], r["level1"], r["level2"]))
+        det = self.coverage_details(drive_id, gaps) if details else {}
         level1: dict[str, dict[str, Any]] = {}
+        l1_years: dict[str, Counter] = defaultdict(Counter)
+        l1_classes: dict[str, Counter] = defaultdict(Counter)
         for r in rows:
             g = level1.setdefault(r["level1"], {"level1": r["level1"], "files": 0, "bytes": 0, "children": []})
             g["files"] += r["files"]
             g["bytes"] += r["bytes"]
             g["children"].append(r)
+            d = det.get((r["level1"], r["level2"]))
+            if d:
+                r["year"], r["year_pct"] = self._dominant(d["years"])
+                r["cls"], r["cls_pct"] = self._dominant(d["classes"])
+                l1_years[r["level1"]].update(d["years"])
+                l1_classes[r["level1"]].update(d["classes"])
+        if details:
+            for name, g in level1.items():
+                g["year"], g["year_pct"] = self._dominant(l1_years[name])
+                g["cls"], g["cls_pct"] = self._dominant(l1_classes[name])
         groups_out = sorted(level1.values(), key=lambda g: (-g["bytes"], g["level1"]))
         unc_files = sum(r["files"] for r in rows)
         unc_bytes = sum(r["bytes"] for r in rows)
