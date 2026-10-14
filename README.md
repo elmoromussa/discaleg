@@ -29,7 +29,7 @@ pip install -r requirements.txt
 
 - **`data/`** — Conté el fitxer de la base de dades (`arxiu_discs.db`, més `-wal`/`-shm` en mode WAL). Es crea automàticament en auditar el primer disc des de **Discs**. No es versiona (`.gitignore`).
 - **`app/`** — Aplicació FastAPI: `schema.py` (esquema i migracions), `audit_to_db.py` (escaneig directe a la DB), `disk_info.py` (identitat física del disc), `migrate.py` (CLI de migració), `queries*.py`, `routes/`, `templates/`, `static/`.
-- **`tools/`** — Eines de línia d'ordres: `scan_drive.py` (escaneig amb progrés al terminal), `hash_files.py` (SHA-256 incremental per disc) i els scripts originals d'auditoria en CSV (`quick_audit_archive.py`, `import_audit_to_db.py`, `import_all_audits.bat`), conservats com a procedència de la base de dades.
+- **`tools/`** — Eines de línia d'ordres: `scan_drive.py` (escaneig amb progrés al terminal), `hash_files.py` (SHA-256 incremental per disc), `cataleg.py` (catàleg de projectes per a la migració a l'arxiu, vegeu `docs/migracio.md`) i els scripts originals d'auditoria en CSV (`quick_audit_archive.py`, `import_audit_to_db.py`, `import_all_audits.bat`), conservats com a procedència de la base de dades.
 - **`docs/`** — Documentació (GitHub Pages).
 - **Arrel del projecte** — `requirements.txt`, `run_inventari_WIN.bat`, `PROJECT_OVERVIEW.md` (referència del projecte), `CLAUDE.md` (guia per a Claude Code), `LICENSE`, `.gitignore`, `.gitattributes`.
 
@@ -63,6 +63,7 @@ L’aplicació pot arrencar **sense cap fitxer de base de dades**. En aquest cas
 - **Hash per fitxer (SHA-256):** procés a part, incremental i reprenible, amb `python tools/hash_files.py --drive EXT-A --root F:\` (vegeu `docs/escaneig_i_hash.md`). Per defecte salta els fitxers que només són al núvol (OneDrive «sota demanda») per no forçar-ne la descàrrega. La pàgina **Discs** mostra el percentatge de fitxers amb hash de cada disc.
 - **Exclusions per disc:** carpetes (amb tot el que pengen) o fitxers, com a rutes relatives a l'arrel (`Windows`, `Users\elmor\AppData`, `pagefile.sys`), que l'escaneig no recorre. Es desen a la fitxa del disc i s'apliquen a cada escaneig; el disc queda marcat com a **inventari parcial**. S'editen a la fitxa o al formulari d'escaneig, i al CLI amb `--exclude`, `--exclude-from` i `--clear-excludes`.
 - **Fitxa del disc:** cada escaneig detecta el maquinari (número de sèrie, model, bus, mida física, estat de salut) i l'espai lliure, i omple els camps buits de la fitxa. Si el número de sèrie no coincideix amb el registrat, l'escaneig s'atura (igual que amb el serial del volum). Les carpetes i fitxers que no s'han pogut llegir queden registrats i es poden consultar des de la fitxa («Errors»). Les rutes de més de 260 caràcters s'inventarien igualment.
+- **Catàleg de projectes (migració a l'arxiu):** `python tools/cataleg.py` classifica els fitxers, troba les carpetes candidates a projecte i escriu `data/cataleg_AAAA-MM-DD.csv` amb la proposta de sèrie, nom, any i capa de cada una, per revisar-la. El vocabulari de sèries i contenidors és `data/vocabulari.json`. Model i detall: `docs/model-arxiu.md`, `docs/eines-migracio.md`, `docs/migracio.md`.
 - **Migrar una DB antiga:** si la base de dades ve d'una versió anterior (sense taula `drives`), executeu un cop `python -m app.migrate` (opcionalment `--legacy-audits <carpeta amb els audit_log.txt>`). L'app avisa amb un error 503 fins que es faci.
 
 ## Rutes
@@ -92,7 +93,7 @@ El fitxer `.gitignore` exclou `data/`, `venv/`, `*.db` i `.env`, de manera que e
 ## Notes
 
 - La base de dades es **llegeix** des de Cercar, Duplicats, Extensions, Carpetes i Explorador; es **escriu** des de **Discs** (escaneig directe o import des de carpeta d’audit en CSV) i des de `tools/hash_files.py`.
-- Esquema versió 8 (`PRAGMA user_version`): taules `drives` (fitxa, maquinari, exclusions i comptadors per disc), `scans` (historial d'escaneigs amb el maquinari vist), `scan_changes` (detall de cada escaneig), `read_errors` (carpetes i fitxers il·legibles), columnes de hash, seguiment, data de creació i atributs a `inventory`, i les taules dels espais virtuals. `folder_path` és relatiu a l'arrel escanejada i els fitxers sense extensió tenen `(no_ext)`. Les DB antigues es migren amb `python -m app.migrate` (vegeu `PROJECT_OVERVIEW.md`).
+- Esquema versió 9 (`PRAGMA user_version`): taules `drives` (fitxa, maquinari, exclusions i comptadors per disc), `scans` (historial d'escaneigs amb el maquinari vist), `scan_changes` (detall de cada escaneig), `read_errors` (carpetes i fitxers il·legibles), columnes de hash, seguiment, data de creació, atributs i classe d'anàlisi a `inventory`, les taules dels espais virtuals i les de la migració a l'arxiu (`candidates`, `candidate_review`, `series`, `projects`, `events`…). `folder_path` és relatiu a l'arrel escanejada i els fitxers sense extensió tenen `(no_ext)`. Les DB antigues es migren amb `python -m app.migrate` (vegeu `PROJECT_OVERVIEW.md`).
 - Les cerques i llistats grans fan servir **paginació** per no sobrecarregar la memòria.
 - Si la DB no existeix, les rutes que la requereixen retornen error 503; la pàgina d’inici i **Discs** es carreguen sense DB.
 
