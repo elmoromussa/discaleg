@@ -29,6 +29,10 @@ Versió (PRAGMA user_version):
   8    + exclusions per disc: drives.exclude_paths (llista JSON de rutes relatives a l'arrel,
          carpetes o fitxers, que l'escaneig no recorre) i scans.exclude_paths (la llista
          aplicada en aquell escaneig; NULL als escaneigs anteriors a la v8). Dues columnes.
+  9    + migració a l'arxiu (docs/eines-migracio.md §0): taules series, projects, candidates,
+         candidate_review, project_sources, project_refs, psx_check, events i copies, i la
+         columna inventory.analysis_class (classe d'anàlisi de app/classes.py, cau que omple
+         tools/cataleg.py). Tot additiu: la migració tarda segons.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -41,7 +45,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Tipus de suport admesos a drives.kind (CHECK) i la seva etiqueta a la interfície.
 DRIVE_KINDS: dict[str, str] = {
@@ -364,6 +368,155 @@ _V8_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "scans": [("exclude_paths", "TEXT")],   # la llista aplicada en aquell escaneig ('[]' si cap)
 }
 
+# v9: migració a l'arxiu (model d'arxiu v1.3, docs/eines-migracio.md §0).
+# Classes d'anàlisi (app/classes.py) amb columna de bytes a `candidates`; l'ordre és el de les
+# columnes b_* i el del CSV del catàleg.
+ANALYSIS_CLASSES: tuple[str, ...] = (
+    "ORIG", "IMG", "VID", "PROJ", "PROC", "PROD", "DOC", "AUD", "CODI", "SOFT", "IMGDISC",
+    "COMP", "SYS", "ALTRES",
+)
+CANDIDATE_KINDS: tuple[str, ...] = ("projecte", "capa", "residu", "recuperacio", "sistema")
+PROJECT_LAYERS: tuple[str, ...] = ("RAW", "PROJ", "OUT", "DOC")
+
+_V9_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "inventory": [("analysis_class", "TEXT")],  # classe d'anàlisi (cau; NULL = pendent)
+}
+
+_DDL_V9 = f"""
+CREATE TABLE IF NOT EXISTS series (
+    serie_id      INTEGER PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    code          TEXT,
+    kind          TEXT NOT NULL CHECK (kind IN ('lloc', 'programa', 'client', 'tipus', 'varis')),
+    status        TEXT NOT NULL DEFAULT 'activa' CHECK (status IN ('activa', 'inactiva')),
+    disk_a_serial TEXT,
+    disk_b_serial TEXT,
+    notes         TEXT,
+    created_utc   TEXT NOT NULL,
+    updated_utc   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+    project_id    INTEGER PRIMARY KEY,
+    serie_id      INTEGER NOT NULL REFERENCES series(serie_id),
+    name          TEXT NOT NULL,
+    year          INTEGER,
+    status        TEXT NOT NULL DEFAULT 'obert'
+                  CHECK (status IN ('obert', 'en-tancament', 'tancat', 'descartat')),
+    primary_model TEXT CHECK (primary_model IS NULL OR primary_model IN ('primari', 'secundari')),
+    rights        TEXT,
+    exceptions    TEXT,
+    raw_style     TEXT CHECK (raw_style IS NULL OR raw_style IN ('nou', 'llegat')),
+    created_utc   TEXT NOT NULL,
+    updated_utc   TEXT,
+    sealed_utc    TEXT,
+    UNIQUE (serie_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS candidates (
+    candidate_id        INTEGER PRIMARY KEY,
+    drive_id            TEXT NOT NULL,
+    relative_path       TEXT NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN {CANDIDATE_KINDS!r}),
+    parent_path         TEXT,
+    files_count         INTEGER NOT NULL DEFAULT 0,
+    total_bytes         INTEGER NOT NULL DEFAULT 0,
+    unique_bytes_approx INTEGER,
+    {", ".join(f"b_{c.lower():<8} INTEGER NOT NULL DEFAULT 0" for c in ANALYSIS_CLASSES)},
+    min_mtime           TEXT,
+    max_mtime           TEXT,
+    markers_json        TEXT,
+    proposed_serie      TEXT,
+    serie_match         TEXT,
+    proposed_project    TEXT,
+    proposed_layer      TEXT CHECK (proposed_layer IS NULL OR
+                                    proposed_layer IN ('RAW', 'PROJ', 'OUT', 'DOC', 'FORA')),
+    proposed_year       INTEGER,
+    layer_confidence    TEXT CHECK (layer_confidence IS NULL OR
+                                    layer_confidence IN ('regla', 'nom', 'ambigu')),
+    same_content_drives TEXT,
+    canonical_proposed  INTEGER NOT NULL DEFAULT 0,
+    generated_scan_set  TEXT,
+    generated_utc       TEXT,
+    UNIQUE (drive_id, relative_path)
+);
+
+CREATE TABLE IF NOT EXISTS candidate_review (
+    drive_id      TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    candidate_id  INTEGER REFERENCES candidates(candidate_id),
+    serie         TEXT,
+    project       TEXT,
+    layer         TEXT CHECK (layer IS NULL OR layer IN ('RAW', 'PROJ', 'OUT', 'DOC')),
+    year          INTEGER,
+    decision      TEXT CHECK (decision IS NULL OR decision IN
+                      ('tancar', 'obert', 'descartar', 'fusionar-amb', 'tercers', 'personal')),
+    fusion_target TEXT,
+    canonical     INTEGER,
+    primary_model TEXT CHECK (primary_model IS NULL OR primary_model IN ('primari', 'secundari')),
+    exceptions    TEXT,
+    notes         TEXT,
+    reviewed_utc  TEXT NOT NULL,
+    PRIMARY KEY (drive_id, relative_path)
+);
+
+CREATE TABLE IF NOT EXISTS project_sources (
+    project_id   INTEGER NOT NULL REFERENCES projects(project_id),
+    candidate_id INTEGER NOT NULL REFERENCES candidates(candidate_id),
+    layer        TEXT CHECK (layer IS NULL OR layer IN ('RAW', 'PROJ', 'OUT', 'DOC')),
+    canonical    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (project_id, candidate_id)
+);
+
+CREATE TABLE IF NOT EXISTS project_refs (
+    project_id      INTEGER NOT NULL REFERENCES projects(project_id),
+    uses_project_id INTEGER NOT NULL REFERENCES projects(project_id),
+    kind            TEXT NOT NULL CHECK (kind IN ('captures', 'gis-base')),
+    PRIMARY KEY (project_id, uses_project_id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS psx_check (
+    id                   INTEGER PRIMARY KEY,
+    drive_id             TEXT NOT NULL,
+    relative_path        TEXT NOT NULL,
+    checked_utc          TEXT NOT NULL,
+    app_version          TEXT,
+    chunks               INTEGER,
+    cameras              INTEGER,
+    resolved_same        INTEGER,
+    resolved_other_drive INTEGER,
+    orphans              INTEGER,
+    photos_json          TEXT,
+    notes                TEXT,
+    UNIQUE (drive_id, relative_path)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    event_id      INTEGER PRIMARY KEY,
+    utc           TEXT NOT NULL,
+    agent         TEXT NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('copia', 'verificacio', 'tancament', 'esmena',
+                      'reobertura', 'quarantena', 'esborrat', 'excepcio', 'pas0')),
+    project_id    INTEGER REFERENCES projects(project_id),
+    drive_id      TEXT,
+    relative_path TEXT,
+    outcome       TEXT NOT NULL CHECK (outcome IN ('ok', 'error', 'parcial')),
+    details_json  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, utc);
+CREATE INDEX IF NOT EXISTS idx_events_drive ON events(drive_id, relative_path);
+
+CREATE TABLE IF NOT EXISTS copies (
+    project_id      INTEGER NOT NULL REFERENCES projects(project_id),
+    layer           TEXT NOT NULL CHECK (layer IN ('RAW', 'PROJ', 'OUT', 'DOC')),
+    drive_id        TEXT NOT NULL,
+    verified_utc    TEXT NOT NULL,
+    manifest_sha256 TEXT,
+    status          TEXT NOT NULL CHECK (status IN ('parcial', 'completa')),
+    PRIMARY KEY (project_id, layer, drive_id)
+);
+"""
+
 
 def _exec_statements(conn: sqlite3.Connection, sql: str) -> None:
     """Executa un bloc DDL sentència a sentència (executescript faria COMMIT implícit).
@@ -419,6 +572,15 @@ def _apply_v8(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
+def _apply_v9(conn: sqlite3.Connection) -> list[str]:
+    """Columna i taules de la v9 (idempotent). Retorna les columnes afegides."""
+    added: list[str] = []
+    for table, columns in _V9_COLUMNS.items():
+        added += [f"{table}.{c}" for c in _add_missing_columns(conn, table, columns)]
+    _exec_statements(conn, _DDL_V9)
+    return added
+
+
 def set_pragmas_for_writes(conn: sqlite3.Connection) -> None:
     """Pragmes per a escriptures massives (escaneig / hash). Cal fora de transacció."""
     conn.execute("PRAGMA journal_mode = WAL")
@@ -446,6 +608,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _exec_statements(conn, _DDL_V6)
         _apply_v7(conn)
         _apply_v8(conn)
+        _apply_v9(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -488,6 +651,8 @@ def migrate(
         _migrate_to_v7(conn, log)
     if get_user_version(conn) < 8:
         _migrate_to_v8(conn, log)
+    if get_user_version(conn) < 9:
+        _migrate_to_v9(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -708,6 +873,20 @@ def _migrate_to_v8(conn: sqlite3.Connection, log: Callable[[str], None]) -> None
         conn.execute("ROLLBACK")
         raise
     log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}")
+
+
+def _migrate_to_v9(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 9 (taules de migració a l'arxiu i inventory.analysis_class)…")
+    conn.execute("BEGIN")
+    try:
+        added = _apply_v9(conn)
+        conn.execute("PRAGMA user_version = 9")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}; taules series, projects, "
+        "candidates, candidate_review, project_sources, project_refs, psx_check, events i copies")
 
 
 def refresh_drive_counters(
