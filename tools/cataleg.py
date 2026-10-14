@@ -271,7 +271,7 @@ def make_descriptor(name: str, serie: dict[str, Any] | None, year: int | None) -
 
 
 def nfc_lower(name: str) -> str:
-    return unicodedata.normalize("NFC", name).lower()
+    return schema.name_key(name)  # la mateixa clau que inventory.name_key (v12)
 
 
 def year_of(mtime: str | None) -> int | None:

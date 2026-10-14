@@ -7,20 +7,46 @@ col·lecció d'elements, taula `items` + `space_members`). Els espais pengen d'u
 
 Les claus foranes de SQLite no s'activen per connexió, de manera que l'esborrat en cascada
 es fa explícitament amb un CTE recursiu (descendents) en lloc de confiar en ON DELETE.
+
+Arxiu virtual (v12): un espai pot ser a més un node de l'arxiu de destí (`archive_kind`
+fons › serie › projecte › capa › carpeta, amb `target_name` = nom de la carpeta de destí),
+i cada membre d'un espai d'arxiu té un paper (`role`) i un destí (`target_subpath`). Les
+regles de jerarquia i de nomenclatura (model d'arxiu §8) es validen ací, en escriure; els
+càlculs (totals, arbre de destí, cobertura, comprovacions) són a app/queries_arxiu.py.
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from typing import Any
 
 from app.queries import SPACE_ITEMS_SQL, TAG_ITEMS_SQL, folder_range, items_resolution_sql
-from app.schema import utc_now_iso
+from app.schema import ARCHIVE_KINDS, MEMBER_ROLES, PROJECT_LAYERS, SPACE_STATES, utc_now_iso
 from app.search_params import parse_search_params, run_file_search
 
 SPACE_KINDS = ("smart", "manual")
 NAME_MAX = 120
 DESCRIPTION_MAX = 2000
+
+# Nomenclatura del model d'arxiu (§8) per a target_name segons archive_kind.
+RE_SERIE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+RE_PROJECT = re.compile(r"^\d{4}_[a-z0-9]+(-[a-z0-9]+)*$")
+RE_FONS = re.compile(r"^_?[A-Za-z0-9][A-Za-z0-9_-]*$")
+RE_CARPETA = re.compile(r'^[^\\/:*?"<>|]+$')
+# Tipus de pare admesos per a cada tipus d'espai d'arxiu (None = arrel).
+ARCHIVE_PARENTS: dict[str, tuple[str | None, ...]] = {
+    "fons": (None,),
+    "serie": ("fons",),
+    "projecte": ("serie",),
+    "capa": ("projecte",),
+    "carpeta": ("capa", "carpeta", "fons"),
+}
+# target_subpath que vol dir «el contingut de la carpeta d'origen va a l'arrel de l'espai,
+# sense la carpeta d'origen pel mig».
+SUBPATH_ROOT = "."
+SPACE_COLUMNS = ("space_id, parent_id, name, kind, query_json, description, sort_order, "
+                 "created_utc, updated_utc, archive_kind, target_name, state, canonical_drive_id")
 
 # Ordenació del contingut d'un espai (clau de la interfície -> columna de search_inventory)
 CONTENT_SORT_KEYS = {
@@ -53,9 +79,8 @@ def _row(r: sqlite3.Row | tuple) -> dict[str, Any]:
 def list_spaces(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Tots els espais (són pocs), ordenats per pare, ordre manual i nom."""
     cur = conn.execute(
-        """
-        SELECT space_id, parent_id, name, kind, query_json, description, sort_order,
-               created_utc, updated_utc
+        f"""
+        SELECT {SPACE_COLUMNS}
         FROM spaces ORDER BY parent_id IS NOT NULL, parent_id, sort_order, name COLLATE NOCASE
         """
     )
@@ -83,12 +108,19 @@ def flatten_tree(tree: list[dict[str, Any]], depth: int = 0) -> list[dict[str, A
 
 def get_space(conn: sqlite3.Connection, space_id: int) -> dict[str, Any] | None:
     r = conn.execute(
-        """
-        SELECT space_id, parent_id, name, kind, query_json, description, sort_order,
-               created_utc, updated_utc
-        FROM spaces WHERE space_id = ?
+        f"SELECT {SPACE_COLUMNS} FROM spaces WHERE space_id = ?", (space_id,)
+    ).fetchone()
+    return _row(r) if r else None
+
+
+def find_archive_child(conn: sqlite3.Connection, parent_id: int | None, target_name: str) -> dict[str, Any] | None:
+    """L'espai d'arxiu fill de `parent_id` (None = arrel) amb aquest target_name, si existeix."""
+    r = conn.execute(
+        f"""
+        SELECT {SPACE_COLUMNS} FROM spaces
+        WHERE parent_id IS ? AND archive_kind IS NOT NULL AND target_name = ?
         """,
-        (space_id,),
+        (parent_id, target_name),
     ).fetchone()
     return _row(r) if r else None
 
@@ -140,6 +172,98 @@ def _check_parent(conn: sqlite3.Connection, parent_id: int | None, space_id: int
         raise SpaceError("Un espai no pot penjar de si mateix ni d'un dels seus descendents.")
 
 
+def validate_target_name(archive_kind: str, target_name: str | None) -> str:
+    """Normalitza i valida el nom de destí segons el tipus (model §8). Llança SpaceError."""
+    n = (target_name or "").strip()
+    if not n:
+        raise SpaceError("Un espai d'arxiu necessita el nom de la carpeta de destí (target_name).")
+    if archive_kind == "capa":
+        n = n.upper()
+        if n not in PROJECT_LAYERS:
+            raise SpaceError(f"Una capa ha de ser una de {', '.join(PROJECT_LAYERS)}: «{n}».")
+    elif archive_kind == "projecte":
+        if not RE_PROJECT.match(n) or not 2 <= len(n) - 5 <= 30:
+            raise SpaceError(f"Nom de projecte no vàlid (AAAA_descriptor, minúscules, guions): «{n}».")
+    elif archive_kind == "serie":
+        if not RE_SERIE.match(n):
+            raise SpaceError(f"Nom de sèrie no vàlid (minúscules, dígits i guions): «{n}».")
+    elif archive_kind == "fons":
+        if not RE_FONS.match(n):
+            raise SpaceError(f"Nom de fons no vàlid: «{n}».")
+    else:
+        if not RE_CARPETA.match(n) or n in (".", ".."):
+            raise SpaceError(f"Nom de carpeta no vàlid: «{n}».")
+    return n[:NAME_MAX]
+
+
+def _parent_kind(conn: sqlite3.Connection, parent_id: int | None) -> str | None:
+    if parent_id is None:
+        return None
+    r = conn.execute("SELECT archive_kind FROM spaces WHERE space_id = ?", (parent_id,)).fetchone()
+    if r is None:
+        raise SpaceError("L'espai pare no existeix.")
+    return r[0]
+
+
+def _check_archive(
+    conn: sqlite3.Connection, archive_kind: str | None, target_name: str | None,
+    parent_id: int | None, space_id: int | None, validate_name: bool = True,
+) -> str | None:
+    """Jerarquia fons › serie › projecte › capa › carpeta i nom únic entre germans.
+
+    Retorna el target_name normalitzat (None per a un espai normal). Amb `validate_name`
+    fals s'accepta un nom que no segueix la nomenclatura (la importació d'un CSV amb noms
+    provisionals: `--check` els senyala després).
+    """
+    if archive_kind is None:
+        return None
+    if archive_kind not in ARCHIVE_KINDS:
+        raise SpaceError(f"Tipus d'espai d'arxiu desconegut: {archive_kind!r}")
+    pk = _parent_kind(conn, parent_id)
+    allowed = ARCHIVE_PARENTS[archive_kind]
+    if pk not in allowed:
+        if pk is None and parent_id is not None:
+            raise SpaceError(f"Un espai «{archive_kind}» ha de penjar d'un espai d'arxiu, no d'un espai normal.")
+        if pk is None:
+            raise SpaceError(f"Només un fons pot ser a l'arrel; un espai «{archive_kind}» necessita un pare "
+                             f"de tipus {', '.join(a for a in allowed if a)}.")
+        raise SpaceError(f"Un espai «{archive_kind}» no pot penjar d'un espai «{pk}» "
+                         f"(cal {', '.join(a for a in allowed if a)}).")
+    if validate_name:
+        name = validate_target_name(archive_kind, target_name)
+    else:
+        name = (target_name or "").strip()[:NAME_MAX]
+        if not name or not RE_CARPETA.match(name):
+            raise SpaceError(f"Nom de destí no vàlid: «{target_name}».")
+    dup = conn.execute(
+        """
+        SELECT space_id FROM spaces
+        WHERE parent_id IS ? AND archive_kind IS NOT NULL AND target_name = ? AND space_id IS NOT ?
+        """,
+        (parent_id, name, space_id),
+    ).fetchone()
+    if dup:
+        raise SpaceError(f"Ja hi ha un espai d'arxiu «{name}» sota el mateix pare.")
+    if space_id is not None:
+        # els fills existents han de continuar sent compatibles amb el tipus nou
+        bad = conn.execute(
+            "SELECT archive_kind FROM spaces WHERE parent_id = ? AND archive_kind IS NOT NULL",
+            (space_id,),
+        ).fetchall()
+        for (ck,) in bad:
+            if archive_kind not in ARCHIVE_PARENTS[ck]:
+                raise SpaceError(f"L'espai té fills «{ck}», que no poden penjar d'un espai «{archive_kind}».")
+    return name
+
+
+def _check_state(state: str | None) -> str | None:
+    if state is None or state == "":
+        return None
+    if state not in SPACE_STATES:
+        raise SpaceError(f"Estat desconegut: {state!r} (cal {', '.join(SPACE_STATES)}).")
+    return state
+
+
 def _query_json(query: dict[str, Any] | None, kind: str) -> str | None:
     if kind != "smart":
         return None
@@ -155,22 +279,36 @@ def create_space(
     parent_id: int | None = None,
     query: dict[str, Any] | None = None,
     description: str | None = None,
+    archive_kind: str | None = None,
+    target_name: str | None = None,
+    state: str | None = None,
+    canonical_drive_id: str | None = None,
+    commit: bool = True,
+    validate_name: bool = True,
 ) -> dict[str, Any]:
     if kind not in SPACE_KINDS:
         raise SpaceError(f"Tipus d'espai desconegut: {kind!r}")
-    name = _clean_name(name)
+    if archive_kind is not None and kind != "manual":
+        raise SpaceError("Un espai d'arxiu és sempre una col·lecció (kind = manual).")
+    name = _clean_name(name or target_name)
     _check_parent(conn, parent_id, None)
+    target = _check_archive(conn, archive_kind, target_name, parent_id, None, validate_name)
+    state = _check_state(state)
     now = utc_now_iso()
     cur = conn.execute(
         """
-        INSERT INTO spaces (parent_id, name, kind, query_json, description, sort_order, created_utc)
+        INSERT INTO spaces (parent_id, name, kind, query_json, description, sort_order, created_utc,
+                            archive_kind, target_name, state, canonical_drive_id)
         VALUES (?, ?, ?, ?, ?,
-                COALESCE((SELECT MAX(sort_order) + 1 FROM spaces WHERE parent_id IS ?), 0), ?)
+                COALESCE((SELECT MAX(sort_order) + 1 FROM spaces WHERE parent_id IS ?), 0), ?,
+                ?, ?, ?, ?)
         """,
         (parent_id, name, kind, _query_json(query, kind),
-         (description or "").strip()[:DESCRIPTION_MAX] or None, parent_id, now),
+         (description or "").strip()[:DESCRIPTION_MAX] or None, parent_id, now,
+         archive_kind, target, state, (canonical_drive_id or "").strip() or None),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return get_space(conn, int(cur.lastrowid))  # type: ignore[return-value]
 
 
@@ -184,6 +322,12 @@ def update_space(
     parent_id: Any = _UNSET,
     query: Any = _UNSET,
     description: Any = _UNSET,
+    archive_kind: Any = _UNSET,
+    target_name: Any = _UNSET,
+    state: Any = _UNSET,
+    canonical_drive_id: Any = _UNSET,
+    sort_order: Any = _UNSET,
+    commit: bool = True,
 ) -> dict[str, Any]:
     space = get_space(conn, space_id)
     if space is None:
@@ -197,6 +341,31 @@ def update_space(
         _check_parent(conn, parent_id, space_id)
         sets.append("parent_id = ?")
         params.append(parent_id)
+    if archive_kind is not _UNSET or target_name is not _UNSET or parent_id is not _UNSET:
+        # qualsevol canvi de tipus, nom de destí o pare es valida contra la jerarquia sencera
+        new_kind = space["archive_kind"] if archive_kind is _UNSET else archive_kind
+        new_target = space["target_name"] if target_name is _UNSET else target_name
+        new_parent = space["parent_id"] if parent_id is _UNSET else parent_id
+        if new_kind is not None and space["kind"] != "manual":
+            raise SpaceError("Un espai d'arxiu és sempre una col·lecció (kind = manual).")
+        target = _check_archive(conn, new_kind, new_target, new_parent, space_id)
+        sets += ["archive_kind = ?", "target_name = ?"]
+        params += [new_kind, target]
+        if new_kind is None and space["archive_kind"] is not None:
+            kids = conn.execute(
+                "SELECT 1 FROM spaces WHERE parent_id = ? AND archive_kind IS NOT NULL LIMIT 1", (space_id,)
+            ).fetchone()
+            if kids:
+                raise SpaceError("No es pot convertir en espai normal: té espais d'arxiu a sota.")
+    if state is not _UNSET:
+        sets.append("state = ?")
+        params.append(_check_state(state))
+    if canonical_drive_id is not _UNSET:
+        sets.append("canonical_drive_id = ?")
+        params.append((canonical_drive_id or "").strip() or None)
+    if sort_order is not _UNSET:
+        sets.append("sort_order = ?")
+        params.append(int(sort_order))
     if query is not _UNSET:
         if space["kind"] != "smart":
             raise SpaceError("Només una cerca desada té criteris.")
@@ -211,7 +380,8 @@ def update_space(
     params.append(utc_now_iso())
     params.append(space_id)
     conn.execute(f"UPDATE spaces SET {', '.join(sets)} WHERE space_id = ?", params)
-    conn.commit()
+    if commit:
+        conn.commit()
     return get_space(conn, space_id)  # type: ignore[return-value]
 
 
@@ -315,24 +485,125 @@ def refresh_item_hashes(conn: sqlite3.Connection) -> int:
     return cur.rowcount
 
 
-def add_members(conn: sqlite3.Connection, space_id: int, specs: list[dict[str, Any]]) -> dict[str, Any]:
+def check_role(role: str | None) -> str | None:
+    r = (role or "").strip() or None
+    if r is not None and r not in MEMBER_ROLES:
+        raise SpaceError(f"Paper desconegut: {role!r} (cal {', '.join(MEMBER_ROLES)}).")
+    return r
+
+
+def check_subpath(subpath: str | None) -> str | None:
+    """Destí dins de l'espai: ruta relativa amb «\\», sense «..»; «.» = arrel sense carpeta d'origen."""
+    s = (subpath or "").replace("/", "\\").strip().strip("\\")
+    if not s:
+        return None
+    if s == SUBPATH_ROOT:
+        return SUBPATH_ROOT
+    parts = s.split("\\")
+    for p in parts:
+        if not p.strip() or p in (".", "..") or not RE_CARPETA.match(p):
+            raise SpaceError(f"Destí no vàlid: «{subpath}».")
+    return "\\".join(p.strip() for p in parts)[:400]
+
+
+def add_members(
+    conn: sqlite3.Connection,
+    space_id: int,
+    specs: list[dict[str, Any]],
+    role: str | None = None,
+    target_subpath: str | None = None,
+    note: str | None = None,
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Afegeix elements a una col·lecció. `role`, `target_subpath` i `note` són els valors per
+    defecte; cada spec pot portar els seus. Un element que ja hi era conserva paper, destí i
+    nota llevat que la spec (o els valors per defecte) en done de nous."""
     space = get_space(conn, space_id)
     if space is None:
         raise SpaceError("L'espai no existeix.")
     if space["kind"] != "manual":
         raise SpaceError("Només es poden afegir elements a una col·lecció (no a una cerca desada).")
     ids, errors = upsert_items(conn, specs)
+    ok_specs = [s for s in specs if (s.get("kind") or "") in ITEM_KINDS and s.get("drive_id")]
     now = utc_now_iso()
     added = 0
-    for item_id in ids:
+    for i, item_id in enumerate(ids):
+        spec = ok_specs[i] if i < len(ok_specs) else {}
+        r = check_role(spec.get("role", role))
+        sp = check_subpath(spec.get("target_subpath", target_subpath))
+        nt = (spec.get("note", note) or "").strip() or None
         cur = conn.execute(
-            "INSERT OR IGNORE INTO space_members (space_id, item_id, added_utc) VALUES (?, ?, ?)",
-            (space_id, item_id, now),
+            """
+            INSERT INTO space_members (space_id, item_id, added_utc, note, role, target_subpath)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(space_id, item_id) DO UPDATE SET
+                role = COALESCE(excluded.role, space_members.role),
+                target_subpath = COALESCE(excluded.target_subpath, space_members.target_subpath),
+                note = COALESCE(excluded.note, space_members.note)
+            """,
+            (space_id, item_id, now, nt, r, sp),
         )
-        added += cur.rowcount
+        added += 1 if cur.rowcount and conn.execute(
+            "SELECT added_utc = ? FROM space_members WHERE space_id = ? AND item_id = ?",
+            (now, space_id, item_id)).fetchone()[0] else 0
     conn.execute("UPDATE spaces SET updated_utc = ? WHERE space_id = ?", (now, space_id))
-    conn.commit()
+    if commit:
+        conn.commit()
     return {"added": added, "already": len(ids) - added, "errors": errors, "item_ids": ids}
+
+
+def update_member(
+    conn: sqlite3.Connection, space_id: int, item_id: int,
+    role: Any = _UNSET, target_subpath: Any = _UNSET, note: Any = _UNSET, commit: bool = True,
+) -> bool:
+    """Canvia paper, destí o nota d'un membre (None esborra el valor)."""
+    sets: list[str] = []
+    params: list[Any] = []
+    if role is not _UNSET:
+        sets.append("role = ?")
+        params.append(check_role(role))
+    if target_subpath is not _UNSET:
+        sets.append("target_subpath = ?")
+        params.append(check_subpath(target_subpath))
+    if note is not _UNSET:
+        sets.append("note = ?")
+        params.append((note or "").strip()[:DESCRIPTION_MAX] or None)
+    if not sets:
+        return False
+    cur = conn.execute(
+        f"UPDATE space_members SET {', '.join(sets)} WHERE space_id = ? AND item_id = ?",
+        params + [space_id, item_id],
+    )
+    if commit:
+        conn.commit()
+    return cur.rowcount > 0
+
+
+def move_member(conn: sqlite3.Connection, space_id: int, item_id: int, to_space_id: int) -> bool:
+    """Trasllada un membre (amb paper, destí i nota) a una altra col·lecció."""
+    target = get_space(conn, to_space_id)
+    if target is None or target["kind"] != "manual":
+        raise SpaceError("L'espai de destí no existeix o no és una col·lecció.")
+    row = conn.execute(
+        "SELECT added_utc, note, role, target_subpath FROM space_members WHERE space_id = ? AND item_id = ?",
+        (space_id, item_id),
+    ).fetchone()
+    if row is None:
+        return False
+    conn.execute(
+        """
+        INSERT INTO space_members (space_id, item_id, added_utc, note, role, target_subpath)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(space_id, item_id) DO UPDATE SET
+            note = excluded.note, role = excluded.role, target_subpath = excluded.target_subpath
+        """,
+        (to_space_id, item_id, row[0], row[1], row[2], row[3]),
+    )
+    conn.execute("DELETE FROM space_members WHERE space_id = ? AND item_id = ?", (space_id, item_id))
+    now = utc_now_iso()
+    conn.execute("UPDATE spaces SET updated_utc = ? WHERE space_id IN (?, ?)", (now, space_id, to_space_id))
+    conn.commit()
+    return True
 
 
 def remove_member(conn: sqlite3.Connection, space_id: int, item_id: int) -> bool:

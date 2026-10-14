@@ -38,6 +38,13 @@ Versió (PRAGMA user_version):
   11   + candidates.psx_total, psx_checked, psx_absorbed, psx_orphans, files_bytes i psx_unchecked:
          enllaç del catàleg amb el comprovador (els .psx de cada candidat i la mida de les seues
          .files). Sis columnes amb valor per defecte.
+  12   + arxiu virtual (docs/migracio.md): spaces.archive_kind, target_name, state i
+         canonical_drive_id (un espai pot ser fons, sèrie, projecte, capa o carpeta de l'arxiu
+         de destí), space_members.role i target_subpath (paper i destí de cada membre), i la
+         clau de còpia inventory.name_key (nom en NFC i minúscules, calculat en Python per lots
+         durant la migració: les còpies fetes des de macOS tenen els accents en NFD) amb l'índex
+         parcial cobridor idx_inventory_name_key(name_key, size_bytes, drive_id). La migració
+         tarda minuts amb milions de files (omplir la columna i construir l'índex).
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -47,10 +54,26 @@ Versió (PRAGMA user_version):
 from __future__ import annotations
 
 import sqlite3
+import unicodedata
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
+
+# Arxiu virtual (v12): tipus d'espai d'arxiu (spaces.archive_kind), estats (spaces.state) i
+# paper de cada membre (space_members.role). NULL a archive_kind = espai normal.
+ARCHIVE_KINDS: tuple[str, ...] = ("fons", "serie", "projecte", "capa", "carpeta")
+SPACE_STATES: tuple[str, ...] = ("obert", "en-tancament", "tancat")
+MEMBER_ROLES: tuple[str, ...] = ("canonica", "copia", "part", "descartar", "quarantena", "tercers")
+
+# Clau de còpia: fitxers ≥ 1 MiB amb el mateix name_key i la mateixa mida (els més menuts
+# compten com a únics). Mateix criteri que tools/cataleg.py.
+COPY_MIN_SIZE = 1_048_576
+
+
+def name_key(name: str) -> str:
+    """Clau de nom per a detectar còpies: NFC i minúscules (inventory.name_key)."""
+    return unicodedata.normalize("NFC", name).lower()
 
 # Tipus de suport admesos a drives.kind (CHECK) i la seva etiqueta a la interfície.
 DRIVE_KINDS: dict[str, str] = {
@@ -596,6 +619,74 @@ _V11_COLUMNS: dict[str, list[tuple[str, str]]] = {
 }
 
 
+# v12: arxiu virtual (espais d'arxiu i paper dels membres) i clau de còpia name_key.
+_V12_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "inventory": [("name_key", "TEXT")],  # nom en NFC i minúscules (schema.name_key)
+    "spaces": [
+        ("archive_kind", f"TEXT CHECK (archive_kind IS NULL OR archive_kind IN {ARCHIVE_KINDS!r})"),
+        ("target_name", "TEXT"),          # nom de la carpeta de destí (AAAA_descriptor, RAW…)
+        ("state", f"TEXT CHECK (state IS NULL OR state IN {SPACE_STATES!r})"),
+        ("canonical_drive_id", "TEXT"),   # disc on viurà la sèrie o el projecte
+    ],
+    "space_members": [
+        ("role", f"TEXT CHECK (role IS NULL OR role IN {MEMBER_ROLES!r})"),
+        ("target_subpath", "TEXT"),       # ruta relativa dins de l'espai; NULL = arrel
+    ],
+}
+
+_DDL_V12 = """
+CREATE INDEX IF NOT EXISTS idx_inventory_name_key
+    ON inventory(name_key, size_bytes, drive_id) WHERE missing_since_utc IS NULL;
+"""
+
+
+def _apply_v12_columns(conn: sqlite3.Connection) -> list[str]:
+    added: list[str] = []
+    for table, columns in _V12_COLUMNS.items():
+        added += [f"{table}.{c}" for c in _add_missing_columns(conn, table, columns)]
+    return added
+
+
+def fill_name_keys(
+    conn: sqlite3.Connection,
+    batch: int = 50_000,
+    log: Callable[[str], None] | None = None,
+) -> int:
+    """Omple inventory.name_key on és NULL, per lots de `batch` files amb commit a cada lot.
+
+    Totes les files (també les desaparegudes), per rowid ascendent: es pot aturar i reprendre.
+    Retorna el nombre de files actualitzades.
+    """
+    total = 0
+    last_id = 0
+    while True:
+        rows = conn.execute(
+            "SELECT id, name FROM inventory WHERE id > ? AND name_key IS NULL ORDER BY id LIMIT ?",
+            (last_id, batch),
+        ).fetchall()
+        if not rows:
+            break
+        last_id = rows[-1][0]
+        conn.executemany(
+            "UPDATE inventory SET name_key = ? WHERE id = ?",
+            [(name_key(name), fid) for fid, name in rows],
+        )
+        conn.commit()
+        total += len(rows)
+        if log and total % 1_000_000 < batch:
+            log(f"  name_key: {total:,} files")
+        if len(rows) < batch:
+            break
+    return total
+
+
+def _apply_v12(conn: sqlite3.Connection) -> list[str]:
+    """Columnes i índex de la v12 (idempotent, per a DB noves o buides)."""
+    added = _apply_v12_columns(conn)
+    _exec_statements(conn, _DDL_V12)
+    return added
+
+
 def _apply_v11(conn: sqlite3.Connection) -> list[str]:
     """Columnes de la v11 (idempotent). Retorna les columnes afegides."""
     added: list[str] = []
@@ -651,6 +742,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _apply_v9(conn)
         _apply_v10(conn)
         _apply_v11(conn)
+        _apply_v12(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -699,6 +791,8 @@ def migrate(
         _migrate_to_v10(conn, log)
     if get_user_version(conn) < 11:
         _migrate_to_v11(conn, log)
+    if get_user_version(conn) < 12:
+        _migrate_to_v12(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -959,6 +1053,31 @@ def _migrate_to_v11(conn: sqlite3.Connection, log: Callable[[str], None]) -> Non
         conn.execute("ROLLBACK")
         raise
     log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}")
+
+
+def _migrate_to_v12(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    """Arxiu virtual i clau de còpia. Tres passos idempotents, cadascun amb el seu commit:
+    columnes (transacció), name_key per lots de 50.000 (commit a cada lot) i índex + versió."""
+    log("Migrant a la versió 12 (arxiu virtual i clau de còpia name_key)… pot tardar minuts")
+    conn.execute("BEGIN")
+    try:
+        added = _apply_v12_columns(conn)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}")
+    n = fill_name_keys(conn, log=log)
+    log(f"  name_key calculat per a {n:,} files")
+    conn.execute("BEGIN")
+    try:
+        _exec_statements(conn, _DDL_V12)
+        conn.execute("PRAGMA user_version = 12")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log("  índex idx_inventory_name_key creat")
 
 
 def refresh_drive_counters(

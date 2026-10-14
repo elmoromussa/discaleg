@@ -1,16 +1,18 @@
 # Migració a l'arxiu: catàleg de projectes (pas A)
 
-Eines que implementen el model d'arxiu v1.3 (`docs/model-arxiu.md`) seguint l'especificació de
-`docs/eines-migracio.md`. Aquesta pàgina documenta el que ja existeix: l'esquema v9, les classes
-d'anàlisi, el vocabulari i el catàleg (`tools/cataleg.py`). El comprovador de rutes de Metashape,
-la importació de la revisió (`--import`, `--build-projects`) i l'executor vindran després.
+Eines que implementen el model d'arxiu v1.4 (`docs/model-arxiu.md`) seguint l'especificació de
+`docs/eines-migracio.md`. Aquesta pàgina documenta el que ja existeix: l'esquema v9 a v12, les
+classes d'anàlisi, el vocabulari, el catàleg (`tools/cataleg.py`) amb la importació de la revisió
+(`--import`, `--build-projects`), el comprovador de rutes de Metashape (`tools/rutes_metashape.py`)
+i l'arxiu virtual (`tools/espais.py`, secció final). L'executor vindrà després.
 
-## Esquema v9, v10 i v11
+## Esquema v9, v10, v11 i v12
 
 `python -m app.migrate` afegeix, sense tocar cap taula existent (v10: només la columna
 `psx_check.chunks_json`, detall per chunk del comprovador de rutes; v11: sis columnes a
 `candidates` amb els `.psx` de cada candidat i la mida de les seues `.files`, llegides de
-`psx_check`):
+`psx_check`; v12: l'arxiu virtual i la clau de còpia `inventory.name_key`, vegeu la secció
+«Arxiu virtual»):
 
 - `inventory.analysis_class` (text, nul·lable): classe d'anàlisi de cada fitxer (cau; NULL = pendent).
 - `series`, `projects`, `candidates`, `candidate_review`, `project_sources`, `project_refs`,
@@ -408,3 +410,130 @@ disc), mida i hash SHA-256 si l'inventari el té (tabuladors). És el `RAW\selec
   bytes de projecte (66,8 % per la ruta, 11,8 % pel contingut; 86,6 % sense els `varis` de
   capa FORA). El criteri del 90 % de l'especificació no s'assoleix encara: els 20 `varis` més
   grans del resum són la llista per ampliar el vocabulari o decidir a la revisió.
+
+## Arxiu virtual (esquema v12, `tools/espais.py`)
+
+L'arxiu digital net es munta primer **dins de la DB**, sobre els espais virtuals, abans de
+moure cap fitxer: un arbre d'espais que reprodueix l'arxiu de destí (fons › sèrie › projecte ›
+capa › carpeta) i que té com a membres les carpetes i fitxers d'origen dels discs, cadascun amb
+el seu paper. Així es veu què va on, què és canònic i què és còpia, què queda fora de tot, i al
+final s'exporta a l'executor. No s'escriu a cap disc: només a `spaces`, `items` i
+`space_members`.
+
+### Esquema v12
+
+- `spaces.archive_kind` (`fons`, `serie`, `projecte`, `capa`, `carpeta`; NULL = espai normal),
+  `target_name` (nom de la carpeta de destí: `ARXIU`, `diablo-wasi`, `2021_tambillo`, `RAW`…),
+  `state` (`obert`, `en-tancament`, `tancat`) i `canonical_drive_id` (disc on viurà la sèrie o
+  el projecte). Un espai d'arxiu és sempre una col·lecció (`kind = manual`) i ha de penjar d'un
+  espai d'arxiu del tipus anterior (fons a l'arrel; `carpeta` pot niar `carpeta` i també penjar
+  d'un fons, per a `_TERCERS\<persona>`). `queries_spaces` valida la jerarquia, la nomenclatura
+  del model §8 (`^\d{4}_[a-z0-9]+(-[a-z0-9]+)*$` per als projectes, `^[a-z0-9]+(-[a-z0-9]+)*$`
+  per a les sèries, `RAW`/`PROJ`/`OUT`/`DOC` per a les capes) i que el nom siga únic entre
+  germans. La importació del CSV pot crear projectes amb nom provisional (`XXXX_…`,
+  `2007-2013_…`) perquè `--check` els senyale.
+- `space_members.role` (`canonica`, `copia`, `part`, `descartar`, `quarantena`, `tercers`; NULL
+  = sense decidir) i `target_subpath` (ruta relativa dins de l'espai on cau el membre; NULL =
+  a l'arrel de l'espai, amb el nom de la carpeta d'origen; `.` = el contingut a l'arrel sense la
+  carpeta d'origen). `note` ja existia.
+- `inventory.name_key` (nom en NFC i minúscules) i l'índex parcial cobridor
+  `idx_inventory_name_key(name_key, size_bytes, drive_id) WHERE missing_since_utc IS NULL`. És la
+  clau de còpia «nom + mida» de tota l'app: les còpies fetes des de macOS (MAC-INESIA, HFS+)
+  guarden els accents en NFD i a NTFS en NFC, i les majúscules canvien entre discs. La migració
+  l'omple en Python per lots de 50.000 files amb commit (`schema.fill_name_keys`; 7 M de files en
+  uns 3 minuts, índex inclòs); l'escàner i la importació CSV la posen a cada fitxer nou.
+  `queries_copies` (mode `name-size`) i `cataleg.py` usen la mateixa clau (`schema.name_key`).
+  Sobre la DB real, passar de nom exacte a `name_key` fusiona 813 claus de còpia i fa que 327
+  fitxers (2,5 GB, quasi tots d'EXT-H i EXT-C) que semblaven únics tinguen còpia en un altre disc.
+
+### Càlculs (`app/queries_arxiu.py`, només lectura)
+
+Tot per conjunts sobre els índexs existents; cap bucle per fitxer en Python. Una `ArxiuCalc`
+construeix taules temporals una vegada per connexió:
+
+- **Regla del membre més profund.** Al CSV hi ha carpetes membres dins d'altres carpetes
+  membres a propòsit (`LaPetacaProject2022_temp` sencera a un projecte i `DH_fusion360_rendered`
+  a un altre). Cada fitxer pertany al membre **més profund** que el conté, tant per als totals
+  com per a la cobertura: res es compta dues vegades. Es resol en Python sobre la llista de
+  membres (centenars): el rang de prefix de cada carpeta menys els rangs dels membres niats a
+  dins dona els «segments» propis de cada membre (`temp.arxiu_seg`), i cada fitxer cau en un sol
+  segment. Un fitxer membre és un rang d'un sol element.
+- **Totals per membre** (`item_totals`): suma de `folder_stats` (fitxers directes de cada
+  carpeta, totes les carpetes hi són) sobre els segments pel rang de l'índex
+  `(drive_id, folder_path)`, més la fila exacta de la carpeta membre; els fitxers membres es
+  lligen d'inventory. Un segon de temps per a tots els membres sobre la DB real; el resultat és
+  idèntic al recompte directe sobre inventory (comprovat als 255 membres).
+- **Fitxers ≥ 1 MiB dels membres** (`temp.arxiu_mf`, rang de l'índex únic sobre els segments:
+  1,9 M de files en 5 s) i **claus de còpia** (`temp.arxiu_keys`: un GROUP BY sobre
+  `idx_inventory_name_key` de tota la DB, 1,05 M de claus en 2 s, amb el recompte de còpies
+  vives i els discs on són).
+- **Únics d'un espai** (`space_totals`): bytes dels fitxers dels membres canònica/part que no
+  tenen cap còpia fora de l'espai (i dels seus descendents si `recursive`): una clau és única
+  si el seu recompte global coincideix amb el recompte dins de l'espai, comptant-hi els membres
+  de qualsevol paper (una còpia que ja és membre del mateix projecte no fa perdre la unicitat a
+  la canònica). Els fitxers < 1 MiB compten com a únics (criteri del catàleg). Comprovat contra
+  un anti-join fitxer a fitxer en 12 projectes. Per membre (`member_rows`) es dona a més el
+  percentatge d'únics **per disc** (sense còpia en cap altre disc), la mateixa xifra que la
+  columna `unics` del CSV de conjunts.
+- **Arbre de destí** (`virtual_tree`): per espai la ruta virtual (cadena de `target_name`) i els
+  totals recursius per paper; per membre la ruta final (espai + `target_subpath` + nom
+  d'origen), GB, paper i si està niat dins d'un altre membre. 18 s sobre la DB real amb 201
+  espais, la major part en els `space_totals` de cada espai.
+- **Cobertura d'un disc** (`coverage`): el complement dels rangs coberts (els forats entre els
+  rangs units de les carpetes membres d'espais d'arxiu, de qualsevol paper) sobre `folder_stats`,
+  agrupat per carpeta de nivell 1 i 2; els fitxers de l'arrel ixen com a «(fitxers a l'arrel)»
+  i una carpeta de nivell 1 sense cap membre ix sencera. Dona també el total cobert per paper
+  (canònica / còpia / part / descartar / sense paper). Cobert + fora de tot espai = total del
+  disc, al byte, als 22 discs; 1,6 s per a tots.
+- **Comprovacions** (`check`): `nom-invalid` i `nom-duplicat` entre germans (error),
+  `jerarquia` (error), `paper-contradictori` (la mateixa carpeta canònica en un espai i
+  descartar en un altre: error), `niat-paper-incompatible` (canònica dins de descartar o a
+  l'inrevés al mateix espai: error), `origen-repetit` (la mateixa carpeta en dos espais: avís),
+  `niat-entre-espais` (un membre dins d'un membre d'un altre espai: avís), `sense-canonica`
+  (projecte sense cap membre canònica: avís), `sense-paper` (avís) i `origen-absent` (la
+  carpeta ja no és a l'inventari: avís).
+
+### `tools/espais.py`
+
+```bash
+python tools/espais.py --import data/conjunts_2026-10-14.csv          # prova: no escriu res
+python tools/espais.py --import data/conjunts_2026-10-14.csv --apply  # crea o actualitza
+python tools/espais.py --tree [--root diablo-wasi] [--no-members]
+python tools/espais.py --coverage INT-5     # o --coverage all
+python tools/espais.py --check
+python tools/espais.py --export data/conjunts_export.csv
+```
+
+`--import` llig el CSV de conjunts (`serie;projecte;disc;ruta;gb;unics;capa;paper;nota`, UTF-8
+amb BOM, `;`) i crea, de manera idempotent (clau = ruta virtual), el fons `ARXIU` › sèrie ›
+projecte › capa, i afegeix cada fila com a membre carpeta (o fitxer, si la ruta és un fitxer de
+l'inventari) de l'espai de la capa, o del projecte si la capa és composta (`RAW+PROJ`), `-` o
+`?`; `RAW\processades` és la capa RAW amb `target_subpath = processades`. Paper: CAN →
+`canonica`, COP → `copia`, PART → `part`, DER → `descartar`, `?` → NULL; nota → `note`. Les
+sèries `personal`, `_TERCERS`, `_EINES` i `_DESCARTAR` són fons propis (`PERSONAL`, `_TERCERS`,
+`_EINES`, `_DESCARTAR`) i les seues files en són membres directes. Tot es valida abans
+d'escriure, dins d'una transacció: els **errors** (disc desconegut, carpeta que no és a
+l'inventari, paper o capa desconeguts, sèrie amb nom invàlid) van a `data/conjunts_errors.csv`
+i no s'escriu res; els **avisos** (fila sense disc ni ruta: es crea l'espai sense membre; nom de
+projecte fora de la regla: es crea igualment; fila repetida) també van al CSV però no bloquegen.
+Sense `--apply` és una prova: fa tot el treball i el desfà. Una segona importació no crea res i
+actualitza paper, destí i nota dels membres que ja hi eren; no esborra membres que ja no són al
+CSV.
+
+`--export` torna a escriure el CSV amb les mateixes columnes més `ruta_virtual` i
+`target_subpath`, amb `gb` i `unics` (% per disc) recalculats des de la DB.
+
+### Verificació feta (14/10/2026)
+
+- Migració v12 del banc (4 discs, 512 k fitxers) en 25 s i d'una còpia de la DB real (API de
+  backup, 36 s) en 188 s més la comprovació d'integritat; `quick_check` ok a totes dues. Cap
+  fila d'inventory sense `name_key`.
+- Escàner: un arbre de prova amb noms NFD i majúscules escanejat al banc en mode replace i
+  update dona `name_key` en NFC i minúscules a tots els fitxers.
+- Importació del CSV de conjunts (264 files) sobre la còpia real: 201 espais i 260 membres
+  (les 4 files sense disc creen el projecte sense membre), 0 errors i 7 avisos; la segona
+  importació no crea res; signatures de totes les taules excepte `spaces`, `items` i
+  `space_members` idèntiques abans i després (banc). `--tree` 18 s, `--coverage all` 1,6 s,
+  `--export` 9 s, `--check` 3 errors (noms provisionals) i 79 avisos.
+- Servidor contra el banc: Còpies en mode nom+mida (únic, comparació, llista), Explorador, API
+  d'espais, Duplicats i Cercar sense cap error.

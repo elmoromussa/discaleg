@@ -387,7 +387,7 @@ def scan_drive(
             relative_path TEXT PRIMARY KEY,
             name TEXT NOT NULL, extension TEXT NOT NULL,
             size_bytes INTEGER NOT NULL, modified_utc TEXT,
-            created_utc TEXT, attributes INTEGER
+            created_utc TEXT, attributes INTEGER, name_key TEXT
         ) WITHOUT ROWID
         """
     )
@@ -402,7 +402,7 @@ def scan_drive(
     def flush() -> None:
         if chunk:
             conn.executemany(
-                "INSERT OR REPLACE INTO temp.scan_files VALUES (?, ?, ?, ?, ?, ?, ?)", chunk
+                "INSERT OR REPLACE INTO temp.scan_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)", chunk
             )
             chunk.clear()
 
@@ -418,7 +418,8 @@ def scan_drive(
             rel = (rel_dir + sep + name) if rel_dir else name
             ext = _extension(name)
             chunk.append((rel, name, ext, size, _utc_iso(mtime),
-                          _utc_iso(btime) if btime is not None else None, attrs))
+                          _utc_iso(btime) if btime is not None else None, attrs,
+                          schema.name_key(name)))
             files_count += 1
             total_bytes += size
             e = ext_stats[ext]; e[0] += 1; e[1] += size
@@ -475,10 +476,10 @@ def scan_drive(
             cur = conn.execute(
                 """
                 INSERT INTO inventory (drive_id, relative_path, name, extension, size_bytes,
-                                       modified_utc, created_utc, attributes,
+                                       modified_utc, created_utc, attributes, name_key,
                                        first_seen_scan, last_seen_scan)
                 SELECT ?, relative_path, name, extension, size_bytes, modified_utc,
-                       created_utc, attributes, ?, ?
+                       created_utc, attributes, name_key, ?, ?
                 FROM temp.scan_files
                 """,
                 (drive_id, scan_id, scan_id),
@@ -566,10 +567,10 @@ def scan_drive(
             conn.execute(
                 """
                 INSERT INTO inventory (drive_id, relative_path, name, extension, size_bytes,
-                                       modified_utc, created_utc, attributes,
+                                       modified_utc, created_utc, attributes, name_key,
                                        first_seen_scan, last_seen_scan)
                 SELECT ?, s.relative_path, s.name, s.extension, s.size_bytes, s.modified_utc,
-                       s.created_utc, s.attributes, ?, ?
+                       s.created_utc, s.attributes, s.name_key, ?, ?
                 FROM temp.scan_files s
                 WHERE NOT EXISTS (SELECT 1 FROM inventory i
                                   WHERE i.drive_id = ? AND i.relative_path = s.relative_path)
@@ -711,7 +712,7 @@ def import_from_csv_folder(
                 size = int(row["SizeBytes"])
                 rows.append((drive_id, row["RelativePath"], row["Name"],
                              row["Extension"] or NO_EXT, size, row.get("ModifiedUtc", ""),
-                             scan_id, scan_id))
+                             schema.name_key(row["Name"]), scan_id, scan_id))
                 total_bytes += size
                 if len(rows) >= CHUNK_SIZE:
                     conn.executemany(_INSERT_INV, rows); inv_count += len(rows); rows.clear()
@@ -768,5 +769,5 @@ def import_from_csv_folder(
 
 _INSERT_INV = (
     "INSERT INTO inventory (drive_id, relative_path, name, extension, size_bytes, modified_utc, "
-    "first_seen_scan, last_seen_scan) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    "name_key, first_seen_scan, last_seen_scan) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )

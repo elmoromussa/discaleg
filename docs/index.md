@@ -24,7 +24,7 @@ layout: default
 | [Escaneig, actualització i hash](escaneig_i_hash.html) | Esquema v2, migració, modes d'escaneig, càlcul de SHA-256 incremental |
 | [Model d'arxiu](model-arxiu.html) | Model d'arxiu digital v1.3: sèries, projectes, capes, suports, procediments |
 | [Eines de migració](eines-migracio.html) | Especificació del catàleg, el comprovador de rutes i l'executor |
-| [Migració: catàleg de projectes](migracio.html) | Esquema v9, classes d'anàlisi, vocabulari i `tools/cataleg.py` |
+| [Migració: catàleg de projectes](migracio.html) | Esquema v9 a v12, classes d'anàlisi, vocabulari, `tools/cataleg.py`, comprovador de rutes Metashape i arxiu virtual (`tools/espais.py`) |
 
 ## Enllaços
 

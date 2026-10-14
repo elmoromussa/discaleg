@@ -3,12 +3,14 @@
 Dos criteris d'identitat:
   * 'hash'      — contingut (SHA-256): l'objectiu; només compta els fitxers que ja tenen hash
                   i els altres queden com a «no comprovables».
-  * 'name-size' — nom i mida: aproximació utilitzable sense hashes.
+  * 'name-size' — nom i mida: aproximació utilitzable sense hashes. El nom es compara per
+                  `name_key` (NFC i minúscules, v12): les còpies fetes des de macOS porten els
+                  accents en NFD i les majúscules canvien entre discs.
 
 Dues estratègies, triades per la mida de l'àmbit (disc o carpeta analitzat):
   * àmbit petit (< BIG_SCOPE fitxers): anti-join `NOT EXISTS` fila a fila, amb l'índex exterior
     fixat (`INDEXED BY`) i una sonda per fila sobre un índex cobridor
-    (idx_inventory_hash_size o idx_inventory_name_size);
+    (idx_inventory_hash_size o idx_inventory_name_key);
   * àmbit gran: una sola passada per l'índex cobridor de tota la DB agrupant per clau
     (hash, o nom+mida) i quedant-se les claus que només existeixen a l'àmbit
     (`HAVING MIN(drive_id) = MAX(drive_id)`), i després pertinença `IN` per a les files de
@@ -72,17 +74,17 @@ def _outer_index(mode: str, path_db: str) -> str:
 
 
 def _key_cols(mode: str, alias: str) -> str:
-    return f"{alias}.hash_sha256" if mode == "hash" else f"({alias}.name, {alias}.size_bytes)"
+    return f"{alias}.hash_sha256" if mode == "hash" else f"({alias}.name_key, {alias}.size_bytes)"
 
 
 def _key_select(mode: str) -> str:
-    return "hash_sha256" if mode == "hash" else "name, size_bytes"
+    return "hash_sha256" if mode == "hash" else "name_key, size_bytes"
 
 
 def _match_sql(mode: str) -> str:
     if mode == "hash":
         return "b.hash_sha256 = a.hash_sha256"
-    return "b.name = a.name AND b.size_bytes = a.size_bytes"
+    return "b.name_key = a.name_key AND b.size_bytes = a.size_bytes"
 
 
 def _base_filter(mode: str, alias: str = "a") -> str:
@@ -93,7 +95,7 @@ def _base_filter(mode: str, alias: str = "a") -> str:
 
 
 def _global_index(mode: str) -> str:
-    return "idx_inventory_hash_size" if mode == "hash" else "idx_inventory_name_size"
+    return "idx_inventory_hash_size" if mode == "hash" else "idx_inventory_name_key"
 
 
 def _where(
