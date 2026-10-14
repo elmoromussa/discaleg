@@ -5,10 +5,12 @@ Eines que implementen el model d'arxiu v1.3 (`docs/model-arxiu.md`) seguint l'es
 d'anàlisi, el vocabulari i el catàleg (`tools/cataleg.py`). El comprovador de rutes de Metashape,
 la importació de la revisió (`--import`, `--build-projects`) i l'executor vindran després.
 
-## Esquema v9 i v10
+## Esquema v9, v10 i v11
 
 `python -m app.migrate` afegeix, sense tocar cap taula existent (v10: només la columna
-`psx_check.chunks_json`, detall per chunk del comprovador de rutes):
+`psx_check.chunks_json`, detall per chunk del comprovador de rutes; v11: sis columnes a
+`candidates` amb els `.psx` de cada candidat i la mida de les seues `.files`, llegides de
+`psx_check`):
 
 - `inventory.analysis_class` (text, nul·lable): classe d'anàlisi de cada fitxer (cau; NULL = pendent).
 - `series`, `projects`, `candidates`, `candidate_review`, `project_sources`, `project_refs`,
@@ -159,6 +161,13 @@ columnes: es recalculen amb hash abans del pas E.
   del seu projecte.
 - `generated_scan_set`: JSON amb l'eina i l'últim `scan_id` acabat de cada disc regenerat;
   `generated_utc`, el moment.
+- Enllaç amb el comprovador de rutes (v11), per a cada candidat i sumant els `.psx` vius que té
+  a sota: `psx_total`, `psx_checked` (amb fila a `psx_check`), `psx_absorbed` (absorbits per un
+  altre `.psx`), `psx_orphans` (totes les càmeres orfes, o il·legibles), `files_bytes` (bytes
+  de les `.files` dels `.psx` comprovats, segons l'inventari) i `psx_unchecked` (sense
+  comprovar: el disc no estava connectat quan va córrer el comprovador). Al CSV: `psx_total,
+  psx_absorbits, psx_orfes, gb_files, psx_sense_comprovar`. Cal passar
+  `tools/rutes_metashape.py` abans del catàleg perquè tinguen valor.
 
 **Eixida.** La taula `candidates` i `data/cataleg_AAAA-MM-DD.csv`: UTF-8 amb BOM, separador `;`,
 decimals amb coma, una fila per candidat (també residu, sistema i recuperació), ordenada per disc
@@ -169,13 +178,66 @@ capa_proposada, confianca_capa, discs_mateix_contingut, canonica_proposada`; col
 buides: `rev_serie, rev_projecte, rev_capa, rev_any, rev_decisio, rev_fusionar_amb, rev_canonica,
 rev_primari, rev_excepcions, rev_notes` (les que importarà `--import` a `candidate_review`).
 
-El resum per pantalla dona els candidats per tipus amb els bytes dels de primer nivell (les
+El resum per pantalla dona els candidats per tipus, els `.psx` dels candidats de primer nivell
+(comprovats, absorbits, orfes, sense comprovar i TB de `.files`), amb els bytes dels de primer nivell (les
 capes són part del seu projecte, per no comptar dues vegades), el repartiment per confiança de
 capa, les sèries proposades amb bytes i el percentatge de bytes de projecte amb `serie_match`,
 i els 20 candidats més grans que han caigut a `varis` (la llista per ampliar el vocabulari).
 La línia «amb serie_match» desglossa el percentatge de bytes de projecte trobats per la ruta i
 pel contingut (els `suggerit:` no hi compten), i el percentatge sense comptar els `varis` de capa `FORA` (imatges de disc,
 programari), que no són material d'arxiu.
+
+## Revisió del catàleg (pas B) i construcció de projectes
+
+### Omplir el CSV de revisió
+
+1. Obriu `data/cataleg_AAAA-MM-DD.csv` amb LibreOffice Calc. Al diàleg d'importació: joc de
+   caràcters **Unicode (UTF-8)**, separador **només punt i coma** (desmarqueu coma, tabulador i
+   espai), delimitador de text `"`, i marqueu **«Format de camp entre cometes com a text»**;
+   deixeu la detecció de números activada (les columnes `gb_*` porten coma decimal). No toqueu
+   les columnes `disc` i `ruta`: són la clau.
+2. Ompliu només les columnes `rev_*` de les files que decidiu. Valors admesos:
+   - `rev_serie`: un nom del vocabulari (`diablo-wasi`, `covetes`…) o `varis`; buit = acceptar
+     `serie_proposada`.
+   - `rev_projecte`: `AAAA_descriptor` en minúscules (`2023_registre`); buit = acceptar
+     `projecte_proposat` (només si ja és vàlid: els `AAAA_…` sense any no passen).
+   - `rev_capa`: `RAW`, `PROJ`, `OUT` o `DOC` si el candidat és només una capa d'un projecte.
+   - `rev_any`: quatre dígits; buit = `any_proposat` o l'any del nom del projecte.
+   - `rev_decisio`: `tancar`, `obert`, `descartar`, `fusionar-amb`, `tercers` o `personal`.
+   - `rev_fusionar_amb`: el candidat destí com a `DISC:ruta` (o només `ruta` si és del mateix
+     disc), copiat de les columnes `disc` i `ruta` de la seua fila.
+   - `rev_canonica`: `0` o `1`; `rev_primari`: `primari` o `secundari`; `rev_excepcions` i
+     `rev_notes`: text lliure.
+3. Deseu amb **Fitxer → Anomena i desa**, format **Text CSV**, marqueu «Edita la configuració
+   del filtre» i confirmeu: UTF-8, separador `;`, delimitador `"`, «Desa el contingut de les
+   cel·les tal com es mostra». El BOM és indiferent (l'importador l'accepta amb o sense). Si
+   Calc demana «Mantén el format actual», digueu que sí. Deseu-lo com a
+   `data/cataleg_revisat.csv` (ignorat per git).
+
+### Importar i construir
+
+```bash
+python tools/cataleg.py --import data/cataleg_revisat.csv
+python tools/cataleg.py --build-projects
+```
+
+`--import` llig només les files amb alguna columna `rev_*` plena, les valida totes abans
+d'escriure res (candidat existent a `candidates` per `(disc, ruta)`, sèrie al vocabulari o
+`varis`, nom de projecte amb `^\d{4}_[a-z0-9]+(-[a-z0-9]+)*$`, capa, any, decisió, destí de
+`fusionar-amb` existent, canònica 0/1, primari/secundari) i, si hi ha cap error, escriu
+`data/cataleg_errors.csv` (fila, disc, ruta, columna, valor, error) i no importa res. Si tot és
+correcte, omple `candidate_review` amb clau `(disc, ruta)` (una reimportació substitueix la fila
+d'aquell candidat; les files no presents al CSV es conserven). Les columnes generades del CSV
+s'ignoren: podeu reimportar un CSV generat més tard sense perdre res.
+
+`--build-projects` llig `candidate_review` i, sense tocar cap disc, crea o actualitza `series`
+(codi i tipus del vocabulari), `projects` (any; estat `en-tancament` si la decisió és `tancar`,
+`obert` si no; `primary_model`, `exceptions`; `raw_style = llegat`) i `project_sources` (el
+candidat, la seua `rev_capa` i `rev_canonica`). Sèrie, projecte i any són els revisats o, si són
+buits, els proposats. `descartar`, `tercers` i `personal` no fan projecte; `fusionar-amb` assigna
+el candidat al projecte del destí (seguint la cadena, fins a cinc salts). El resum diu sèries i
+projectes creats, candidats assignats i revisats sense projecte (amb el motiu); es pot repetir
+tantes vegades com calga.
 
 ## Comprovador de rutes dels projectes Metashape (`tools/rutes_metashape.py`)
 
@@ -301,6 +363,14 @@ Dos chunks són «el mateix» si tenen la mateixa etiqueta i el mateix conjunt d
 `.psx`, una fila per chunk i `.psx`: `grup, etiqueta, cameres, n_psx, disc, ruta_psx, chunk_id,
 alineades`, un 0/1 per producte, `processament` (quants productes), `maxim_del_grup` (té el
 màxim processament del grup), `psx_absorbit` i `absorbit_per`.
+
+L'anàlisi inclou els `.psx` de discs no connectats comprovats en passis anteriors: l'empremta
+del conjunt de fotos de cada chunk (`fotos_sha1`) es desa a `chunks_json`, així els grups es
+formen amb tots els `.psx` coneguts i les marques d'absorció es refresquen també als antics
+(els d'un passi anterior a aquesta versió, sense empremta, queden fora fins que es tornen a
+comprovar). `data/files_absorbits_AAAA-MM-DD.csv` dona, per `.psx`, la categoria (`absorbit`;
+`maxim` = no absorbit amb algun chunk màxim del seu grup; `orfe-illegible`; `altre`) i la mida
+de la `.files` segons l'inventari; el resum suma els TB per categoria.
 
 Un chunk està **dominat** per un altre del mateix grup si aquest té tantes o més càmeres
 alineades i tots els productes del primer; en empat exacte, domina el del `.psx` amb més chunks

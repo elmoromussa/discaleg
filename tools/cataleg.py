@@ -14,6 +14,14 @@ app/classes.py). La resta són lectures per conjunts sobre els índexs existents
   - una passada per disc sobre els fitxers vius (índex per disc), que acumula alhora els
     totals de cada candidat ancestre i la clau de còpia (nom NFC minúscula + mida, ≥ 1 MiB).
 
+Cada candidat porta també l'enllaç amb el comprovador de rutes (tools/rutes_metashape.py):
+quants .psx té, quants s'han comprovat, quants són absorbits o orfes, els bytes de les seues
+.files i quants queden sense comprovar (discs no connectats), llegits de psx_check.
+
+Revisió (pas B del model) i construcció de projectes (pas 3 de l'especificació):
+  python tools/cataleg.py --import data/cataleg_revisat.csv   # omple candidate_review (valida abans)
+  python tools/cataleg.py --build-projects                    # series, projects, project_sources
+
 Exemples (des de l'arrel del projecte):
   python tools/cataleg.py                      # tots els discs, CSV a data/
   python tools/cataleg.py --drive INT-5 --drive EXT-B   # només aquests discs (la resta es conserva)
@@ -53,6 +61,13 @@ MAX_CONTAINER_DEPTH = 4               # els contenidors del vocabulari es busque
 CLASSES = schema.ANALYSIS_CLASSES
 SERIE_ORDER = {"lloc": 0, "programa": 1, "client": 2, "tipus": 3, "varis": 4}
 RE_SERIE_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+RE_PROJECT_NAME = re.compile(r"^\d{4}_[a-z0-9]+(-[a-z0-9]+)*$")
+DECISIONS = ("tancar", "obert", "descartar", "fusionar-amb", "tercers", "personal")
+# Columna del CSV de revisió -> columna de candidate_review
+REVIEW_MAP = {"rev_serie": "serie", "rev_projecte": "project", "rev_capa": "layer", "rev_any": "year",
+              "rev_decisio": "decision", "rev_fusionar_amb": "fusion_target", "rev_canonica": "canonical",
+              "rev_primari": "primary_model", "rev_excepcions": "exceptions", "rev_notes": "notes"}
+PSX_COLUMNS = ("psx_total", "psx_checked", "psx_absorbed", "psx_orphans", "files_bytes", "psx_unchecked")
 RE_YEAR4 = re.compile(r"(?<!\d)(19[89]\d|20[0-4]\d)(?!\d)")
 RE_TOKEN_YY = re.compile(r"^[a-z]{2,}(\d{2})$")
 RE_DATE_PREFIX = re.compile(r"^(\d{2}|\d{4})[-_. ](\d{2})[-_. ](\d{2})(?![\d])")
@@ -66,7 +81,8 @@ CSV_GENERATED = [
     "candidate_id", "disc", "serie_disc", "ruta", "tipus", "pare", "fitxers", "bytes", "gb",
     "bytes_unics", "pct_unics",
     *[f"gb_{c.lower()}" for c in CLASSES],
-    "data_min", "data_max", "marcadors", "serie_proposada", "serie_match", "projecte_proposat",
+    "data_min", "data_max", "marcadors", "psx_total", "psx_absorbits", "psx_orfes", "gb_files",
+    "psx_sense_comprovar", "serie_proposada", "serie_match", "projecte_proposat",
     "any_proposat", "capa_proposada", "confianca_capa", "discs_mateix_contingut", "canonica_proposada",
 ]
 CSV_REVIEW = ["rev_serie", "rev_projecte", "rev_capa", "rev_any", "rev_decisio", "rev_fusionar_amb",
@@ -271,7 +287,8 @@ def year_of(mtime: str | None) -> int | None:
 
 class Acc:
     """Totals d'un candidat (o del residu d'un disc), acumulats fitxer a fitxer."""
-    __slots__ = ("files", "bytes", "cls", "ymin", "mtmin", "mtmax", "unique", "copy_bytes", "markers")
+    __slots__ = ("files", "bytes", "cls", "ymin", "mtmin", "mtmax", "unique", "copy_bytes", "markers",
+                 "psx")
 
     def __init__(self) -> None:
         self.files = 0
@@ -283,6 +300,17 @@ class Acc:
         self.unique = 0                         # bytes sense còpia en cap altre disc
         self.copy_bytes: dict[int, int] = {}    # bit del disc -> bytes del candidat amb còpia allà
         self.markers: dict[str, int] = {}       # extensió de marcador -> fitxers (recursiu)
+        self.psx = [0, 0, 0, 0, 0]              # total, comprovats, absorbits, orfes, bytes de .files
+
+    def add_psx(self, info: tuple[int, int, int] | None) -> None:
+        """Un .psx més; `info` = (absorbit, orfe o il·legible, bytes de la .files) de psx_check, o None."""
+        p = self.psx
+        p[0] += 1
+        if info is not None:
+            p[1] += 1
+            p[2] += info[0]
+            p[3] += info[1]
+            p[4] += info[2]
 
     def add(self, size: int, cls: str, year: int | None, mt: str | None, other_mask: int, ext: str | None) -> None:
         self.files += 1
@@ -437,6 +465,7 @@ def aggregate_drive(conn: sqlite3.Connection, drive_id: str, cands: dict[str, Ca
     residu = Acc()
     cache: dict[str, list[Acc]] = {"": []}
     marker_set = set(MARKER_EXTENSIONS)
+    psx_map = load_psx_check(conn, drive_id)
 
     def resolve(folder: str) -> list[Acc]:
         accs = cache.get(folder)
@@ -470,7 +499,25 @@ def aggregate_drive(conn: sqlite3.Connection, drive_id: str, cands: dict[str, Ca
             cls = "ALTRES"
         for acc in accs:
             acc.add(size, cls, year, mtime, other, mext)
+        if ext == ".psx":
+            pi = psx_map.get(path)
+            for acc in accs:
+                acc.add_psx(pi)
     return residu
+
+
+def load_psx_check(conn: sqlite3.Connection, drive_id: str) -> dict[str, tuple[int, int, int]]:
+    """psx_check d'un disc: ruta del .psx -> (absorbit, orfe del tot o il·legible, bytes de la .files)."""
+    out: dict[str, tuple[int, int, int]] = {}
+    for rel, cameras, orphans, notes in conn.execute(
+            "SELECT relative_path, cameras, orphans, notes FROM psx_check WHERE drive_id = ?", (drive_id,)):
+        try:
+            n = json.loads(notes) if notes else {}
+        except json.JSONDecodeError:
+            n = {}
+        orphan = 1 if (not cameras or orphans == cameras) else 0
+        out[rel] = (int(n.get("absorbit") or 0), orphan, int(n.get("files_bytes") or 0))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +550,8 @@ def propose(c: Cand, vocab: Vocab, drive_of_bit: dict[int, str],
         "proposed_serie": None, "serie_match": None, "proposed_project": None,
         "proposed_year": None, "proposed_layer": None, "layer_confidence": None,
         "same_content_drives": None, "canonical_proposed": 0,
+        "psx_total": a.psx[0], "psx_checked": a.psx[1], "psx_absorbed": a.psx[2], "psx_orphans": a.psx[3],
+        "files_bytes": a.psx[4], "psx_unchecked": a.psx[0] - a.psx[1],
     }
     for cls in CLASSES:
         row[f"b_{cls.lower()}"] = a.cls.get(cls, 0)
@@ -691,7 +740,7 @@ def write_candidates(conn: sqlite3.Connection, rows: list[dict[str, Any]], drive
             "unique_bytes_approx", *[f"b_{c.lower()}" for c in CLASSES], "min_mtime", "max_mtime",
             "markers_json", "proposed_serie", "serie_match", "proposed_project", "proposed_layer",
             "proposed_year", "layer_confidence", "same_content_drives", "canonical_proposed",
-            "generated_scan_set", "generated_utc"]
+            *PSX_COLUMNS, "generated_scan_set", "generated_utc"]
     values = []
     for r in rows:
         r = dict(r)
@@ -732,6 +781,7 @@ def write_csv(rows: list[dict[str, Any]], path: Path, drive_info: dict[str, dict
                 r["files_count"], total, _gb(total), uniq, f"{100 * uniq / total:.0f}" if total else "",
                 *[_gb(r[f"b_{c.lower()}"]) for c in CLASSES],
                 r["min_mtime"] or "", r["max_mtime"] or "", r["markers_json"] or "",
+                r["psx_total"], r["psx_absorbed"], r["psx_orphans"], _gb(r["files_bytes"]), r["psx_unchecked"],
                 r["proposed_serie"] or "", r["serie_match"] or "", r["proposed_project"] or "",
                 r["proposed_year"] or "", r["proposed_layer"] or "", r["layer_confidence"] or "",
                 ", ".join(json.loads(r["same_content_drives"])) if r["same_content_drives"] else "",
@@ -789,6 +839,13 @@ def print_summary(rows: list[dict[str, Any]], log=print) -> dict[str, Any]:
         f" sense comptar els «varis» FORA (imatges de disc, programari…):"
         f" {100 * matched_bytes / (proj_bytes - fora_bytes) if proj_bytes > fora_bytes else 0:.1f} %")
 
+    psx_top = [r for r in top]
+    log("")
+    log("== Projectes Metashape dels candidats (de psx_check; bytes de .files segons l'inventari)")
+    log(f"   .psx: {sum(r['psx_total'] for r in psx_top):,}   comprovats: {sum(r['psx_checked'] for r in psx_top):,}"
+        f"   absorbits: {sum(r['psx_absorbed'] for r in psx_top):,}   orfes o il·legibles: {sum(r['psx_orphans'] for r in psx_top):,}"
+        f"   sense comprovar: {sum(r['psx_unchecked'] for r in psx_top):,}   .files: {sum(r['files_bytes'] for r in psx_top) / 1e12:.2f} TB")
+
     varis = sorted((r for r in proj if r["proposed_serie"] == "varis"), key=lambda r: -r["total_bytes"])
     log("")
     log(f"== Candidats a «varis»: {len(varis):,} ({sum(r['total_bytes'] for r in varis) / 1e12:.2f} TB); els 20 més grans")
@@ -798,11 +855,233 @@ def print_summary(rows: list[dict[str, Any]], log=print) -> dict[str, Any]:
             "pct_serie_matched": pct_matched, "by_kind": dict(by_kind)}
 
 
+# ---------------------------------------------------------------------------
+# Revisió: --import i --build-projects
+# ---------------------------------------------------------------------------
+
+def _parse_target(value: str, drive: str) -> tuple[str, str]:
+    """`DISC:ruta` o `ruta` (mateix disc) -> (disc, ruta); `(residu)` -> ruta buida."""
+    v = value.strip()
+    if ":" in v and not v[1:3] == ":\\":
+        d, p = v.split(":", 1)
+        return d.strip(), _ruta_db(p)
+    return drive, _ruta_db(v)
+
+
+def _ruta_db(ruta: str) -> str:
+    r = ruta.strip().replace("/", SEP)
+    return "" if r in ("", "(residu)") else r
+
+
+def import_review(conn: sqlite3.Connection, vocab: Vocab, csv_path: Path,
+                  errors_path: Path) -> tuple[int, list[dict[str, Any]]]:
+    """Llig el CSV revisat i omple candidate_review amb les files que tenen alguna columna rev_*;
+    si hi ha cap error, escriu `errors_path` i no importa res. Retorna (files importades, errors)."""
+    series_ok = set(vocab.series_by_name) | {"varis"}
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+        sample = f.read(4096)
+        f.seek(0)
+        delim = ";" if sample.count(";") >= sample.count(",") else ","
+        reader = csv.DictReader(f, delimiter=delim)
+        if not reader.fieldnames or "disc" not in reader.fieldnames or "ruta" not in reader.fieldnames:
+            raise SystemExit(f"El CSV no té les columnes «disc» i «ruta»: {csv_path}")
+        rows = list(reader)
+    rev_cols = [c for c in REVIEW_MAP if c in (reader.fieldnames or [])]
+    errors: list[dict[str, Any]] = []
+    to_import: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def err(i: int, row: dict[str, Any], col: str, msg: str) -> None:
+        errors.append({"fila": i, "disc": row.get("disc", ""), "ruta": row.get("ruta", ""), "columna": col,
+                       "valor": (row.get(col) or "") if col else "", "error": msg})
+
+    for i, row in enumerate(rows, 2):   # fila 1 = capçalera
+        values = {c: (row.get(c) or "").strip() for c in rev_cols}
+        if not any(values.values()):
+            continue
+        drive, ruta = (row.get("disc") or "").strip(), _ruta_db(row.get("ruta") or "")
+        key = (drive, ruta)
+        cand = conn.execute("SELECT candidate_id FROM candidates WHERE drive_id = ? AND relative_path = ?",
+                            key).fetchone()
+        if cand is None:
+            err(i, row, "", "el candidat (disc, ruta) no és a la taula candidates")
+            continue
+        if key in seen:
+            err(i, row, "", "candidat repetit al CSV")
+            continue
+        seen.add(key)
+        rec: dict[str, Any] = {"drive_id": drive, "relative_path": ruta, "candidate_id": cand[0]}
+        for col, val in values.items():
+            field = REVIEW_MAP[col]
+            v: Any = val or None
+            if v is None:
+                rec[field] = None
+                continue
+            if field == "serie":
+                v = fold(v)
+                if v not in series_ok:
+                    err(i, row, col, "sèrie que no és al vocabulari ni «varis»")
+            elif field == "project":
+                if not RE_PROJECT_NAME.match(v):
+                    err(i, row, col, "nom de projecte invàlid (cal AAAA_descriptor en minúscules)")
+            elif field == "layer":
+                v = v.upper()
+                if v not in schema.PROJECT_LAYERS:
+                    err(i, row, col, "capa invàlida (RAW, PROJ, OUT o DOC)")
+            elif field == "year":
+                if not (v.isdigit() and len(v) == 4):
+                    err(i, row, col, "any invàlid (AAAA)")
+                else:
+                    v = int(v)
+            elif field == "decision":
+                v = fold(v)
+                if v not in DECISIONS:
+                    err(i, row, col, "decisió invàlida (" + ", ".join(DECISIONS) + ")")
+            elif field == "fusion_target":
+                td, tp = _parse_target(v, drive)
+                if conn.execute("SELECT 1 FROM candidates WHERE drive_id = ? AND relative_path = ?",
+                                (td, tp)).fetchone() is None:
+                    err(i, row, col, "el candidat destí (DISC:ruta) no és a la taula candidates")
+                v = f"{td}:{tp}"
+            elif field == "canonical":
+                if v not in ("0", "1"):
+                    err(i, row, col, "canònica invàlida (0 o 1)")
+                else:
+                    v = int(v)
+            elif field == "primary_model":
+                v = fold(v)
+                if v not in ("primari", "secundari"):
+                    err(i, row, col, "valor invàlid (primari o secundari)")
+            rec[field] = v
+        if rec.get("decision") == "fusionar-amb" and not rec.get("fusion_target"):
+            err(i, row, "rev_fusionar_amb", "la decisió fusionar-amb necessita el candidat destí")
+        to_import.append(rec)
+
+    if errors:
+        with open(errors_path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f, delimiter=";", lineterminator="\r\n")
+            w.writerow(["fila", "disc", "ruta", "columna", "valor", "error"])
+            for e in errors:
+                w.writerow([e[k] for k in ("fila", "disc", "ruta", "columna", "valor", "error")])
+        return 0, errors
+    now = schema.utc_now_iso()
+    fields = ["drive_id", "relative_path", "candidate_id", *REVIEW_MAP.values(), "reviewed_utc"]
+    conn.execute("BEGIN")
+    try:
+        conn.executemany(
+            f"INSERT OR REPLACE INTO candidate_review ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
+            [tuple(rec.get(k) if k != "reviewed_utc" else now for k in fields) for rec in to_import])
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return len(to_import), []
+
+
+def build_projects(conn: sqlite3.Connection, vocab: Vocab, log=print) -> dict[str, Any]:
+    """Crea o actualitza series, projects i project_sources a partir de candidate_review (sense tocar
+    cap disc). Sèrie, projecte i any: el revisat o, si és buit, el proposat a candidates; les
+    decisions descartar, tercers i personal no fan projecte; fusionar-amb pren el projecte del
+    candidat destí (seguint la cadena)."""
+    conn.row_factory = sqlite3.Row
+    try:
+        reviews = {(r["drive_id"], r["relative_path"]): dict(r) for r in conn.execute("SELECT * FROM candidate_review")}
+        cands = {(r["drive_id"], r["relative_path"]): dict(r) for r in conn.execute(
+            "SELECT drive_id, relative_path, candidate_id, kind, proposed_serie, proposed_project, proposed_year"
+            " FROM candidates")}
+    finally:
+        conn.row_factory = None
+
+    def effective(key: tuple[str, str], depth: int = 0) -> tuple[str | None, str | None, int | None, str | None]:
+        """(sèrie, projecte, any, motiu si no hi ha projecte) d'un candidat revisat o proposat."""
+        rv = reviews.get(key) or {}
+        cd = cands.get(key)
+        if cd is None:
+            return None, None, None, "candidat inexistent"
+        if rv.get("decision") in ("descartar", "tercers", "personal"):
+            return None, None, None, f"decisió {rv['decision']}"
+        if rv.get("decision") == "fusionar-amb":
+            if depth > 5 or not rv.get("fusion_target"):
+                return None, None, None, "cadena de fusionar-amb sense destí"
+            return effective(_parse_target(rv["fusion_target"], key[0]), depth + 1)
+        serie = rv.get("serie") or cd["proposed_serie"]
+        project = rv.get("project") or cd["proposed_project"]
+        # any: el revisat; si no, el del nom de projecte revisat; si no, el proposat
+        year = rv.get("year") or (int(project[:4]) if rv.get("project") and project[:4].isdigit() else cd["proposed_year"])
+        if not serie or not project or not RE_PROJECT_NAME.match(project):
+            return serie, project, year, "sèrie o nom de projecte no vàlids (reviseu rev_serie/rev_projecte)"
+        return serie, project, int(year) if year else int(project[:4]), None
+
+    now = schema.utc_now_iso()
+    created_series = created_projects = updated_projects = assigned = 0
+    skipped: list[tuple[str, str, str]] = []
+    discarded = 0
+    conn.execute("BEGIN")
+    try:
+        for key, rv in sorted(reviews.items()):
+            if rv.get("decision") in ("descartar", "tercers", "personal"):
+                discarded += 1
+                continue
+            serie, project, year, why = effective(key)
+            if why:
+                skipped.append((key[0], key[1], why))
+                continue
+            sv = vocab.series_by_name.get(serie)
+            row = conn.execute("SELECT serie_id FROM series WHERE name = ?", (serie,)).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO series (name, code, kind, status, created_utc) VALUES (?, ?, ?, 'activa', ?)",
+                             (serie, (sv or {}).get("code"), (sv or {}).get("kind") or "varis", now))
+                created_series += 1
+                serie_id = conn.execute("SELECT serie_id FROM series WHERE name = ?", (serie,)).fetchone()[0]
+            else:
+                serie_id = row[0]
+            status = "en-tancament" if rv.get("decision") == "tancar" else "obert"
+            prow = conn.execute("SELECT project_id FROM projects WHERE serie_id = ? AND name = ?",
+                                (serie_id, project)).fetchone()
+            if prow is None:
+                conn.execute("INSERT INTO projects (serie_id, name, year, status, primary_model, exceptions, raw_style,"
+                             " created_utc) VALUES (?, ?, ?, ?, ?, ?, 'llegat', ?)",
+                             (serie_id, project, year, status, rv.get("primary_model"), rv.get("exceptions"), now))
+                created_projects += 1
+                project_id = conn.execute("SELECT project_id FROM projects WHERE serie_id = ? AND name = ?",
+                                          (serie_id, project)).fetchone()[0]
+            else:
+                project_id = prow[0]
+                if rv.get("decision") != "fusionar-amb":
+                    conn.execute("UPDATE projects SET year = COALESCE(?, year), status = ?,"
+                                 " primary_model = COALESCE(?, primary_model), exceptions = COALESCE(?, exceptions),"
+                                 " updated_utc = ? WHERE project_id = ?",
+                                 (year, status, rv.get("primary_model"), rv.get("exceptions"), now, project_id))
+                    updated_projects += 1
+            cid = cands[key]["candidate_id"]
+            conn.execute("DELETE FROM project_sources WHERE candidate_id = ?", (cid,))
+            conn.execute("INSERT INTO project_sources (project_id, candidate_id, layer, canonical) VALUES (?, ?, ?, ?)",
+                         (project_id, cid, rv.get("layer"), int(rv.get("canonical") or 0)))
+            assigned += 1
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log("")
+    log("== Construcció de projectes a partir de candidate_review")
+    log(f"   candidats revisats: {len(reviews):,}   sèries creades: {created_series:,}   projectes creats: {created_projects:,}"
+        f" (actualitzats: {updated_projects:,})   candidats assignats a project_sources: {assigned:,}")
+    log(f"   descartats, tercers o personal: {discarded:,}   revisats sense projecte: {len(skipped):,}")
+    for d, p, why in skipped[:20]:
+        log(f"      {d:<10} {(p or '(residu)')[:60]:<60} {why}")
+    return {"reviews": len(reviews), "series": created_series, "projects": created_projects, "updated": updated_projects,
+            "assigned": assigned, "discarded": discarded, "skipped": skipped}
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", type=Path, default=database_path, help="Ruta de la DB")
+    ap.add_argument("--import", dest="import_csv", type=Path, metavar="CSV",
+                    help="Importa la revisió (columnes rev_*) a candidate_review; no regenera res")
+    ap.add_argument("--build-projects", action="store_true",
+                    help="Crea o actualitza series, projects i project_sources des de candidate_review; no regenera res")
     ap.add_argument("--vocab", type=Path, default=PROJECT_ROOT / "data" / "vocabulari.json",
                     help="Vocabulari (per defecte data/vocabulari.json)")
     ap.add_argument("--drive", action="append", default=[], help="Només aquest drive_id (repetible)")
@@ -827,6 +1106,20 @@ def main(argv: list[str] | None = None) -> int:
         schema.set_pragmas_for_writes(conn)
         t0 = time.time()
         print(f"DB: {args.db}  vocabulari: {args.vocab} ({len(vocab.series)} sèries)")
+        if args.import_csv or args.build_projects:
+            if args.import_csv:
+                errors_path = args.csv_dir / "cataleg_errors.csv"
+                n, errors = import_review(conn, vocab, args.import_csv, errors_path)
+                if errors:
+                    print(f"No s'ha importat res: {len(errors)} errors a {errors_path}")
+                    for e in errors[:10]:
+                        print(f"   fila {e['fila']}: {e['columna'] or '(clau)'} = «{e['valor']}»: {e['error']}")
+                    return 1
+                print(f"candidate_review: {n} candidats importats de {args.import_csv}")
+            if args.build_projects:
+                build_projects(conn, vocab)
+            print(f"\nTemps total: {time.time() - t0:.0f} s")
+            return 0
         rows = run(conn, vocab, args.drive or None, recalc=args.recalc)
         drive_info = {r[0]: {"serial": r[1] or r[2]} for r in conn.execute(
             "SELECT drive_id, serial_number, volume_serial FROM drives")}

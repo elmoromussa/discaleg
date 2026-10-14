@@ -35,6 +35,9 @@ Versió (PRAGMA user_version):
          tools/cataleg.py). Tot additiu: la migració tarda segons.
   10   + psx_check.chunks_json (detall per chunk del comprovador de rutes Metashape: etiqueta,
          càmeres, alineades, productes). Una columna.
+  11   + candidates.psx_total, psx_checked, psx_absorbed, psx_orphans, files_bytes i psx_unchecked:
+         enllaç del catàleg amb el comprovador (els .psx de cada candidat i la mida de les seues
+         .files). Sis columnes amb valor per defecte.
 
 Ús:
   - init_schema(conn): crea una DB nova directament a la versió actual (idempotent).
@@ -47,7 +50,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Tipus de suport admesos a drives.kind (CHECK) i la seva etiqueta a la interfície.
 DRIVE_KINDS: dict[str, str] = {
@@ -580,6 +583,27 @@ _V10_COLUMNS: dict[str, list[tuple[str, str]]] = {
 }
 
 
+# v11: enllaç del catàleg amb el comprovador de rutes (tools/cataleg.py llig psx_check).
+_V11_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "candidates": [
+        ("psx_total", "INTEGER NOT NULL DEFAULT 0"),      # .psx vius sota el candidat
+        ("psx_checked", "INTEGER NOT NULL DEFAULT 0"),    # … amb fila a psx_check
+        ("psx_absorbed", "INTEGER NOT NULL DEFAULT 0"),   # … absorbits per un altre .psx
+        ("psx_orphans", "INTEGER NOT NULL DEFAULT 0"),    # … orfes del tot o il·legibles
+        ("files_bytes", "INTEGER NOT NULL DEFAULT 0"),    # bytes de les .files dels .psx comprovats
+        ("psx_unchecked", "INTEGER NOT NULL DEFAULT 0"),  # .psx sense comprovar (disc no connectat)
+    ],
+}
+
+
+def _apply_v11(conn: sqlite3.Connection) -> list[str]:
+    """Columnes de la v11 (idempotent). Retorna les columnes afegides."""
+    added: list[str] = []
+    for table, columns in _V11_COLUMNS.items():
+        added += [f"{table}.{c}" for c in _add_missing_columns(conn, table, columns)]
+    return added
+
+
 def _apply_v10(conn: sqlite3.Connection) -> list[str]:
     """Columna de la v10 (idempotent). Retorna les columnes afegides."""
     added: list[str] = []
@@ -626,6 +650,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _apply_v8(conn)
         _apply_v9(conn)
         _apply_v10(conn)
+        _apply_v11(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -672,6 +697,8 @@ def migrate(
         _migrate_to_v9(conn, log)
     if get_user_version(conn) < 10:
         _migrate_to_v10(conn, log)
+    if get_user_version(conn) < 11:
+        _migrate_to_v11(conn, log)
     log("  ANALYZE…")
     conn.execute("ANALYZE")
     conn.commit()
@@ -914,6 +941,19 @@ def _migrate_to_v10(conn: sqlite3.Connection, log: Callable[[str], None]) -> Non
     try:
         added = _apply_v10(conn)
         conn.execute("PRAGMA user_version = 10")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log(f"  columnes afegides: {', '.join(added) or 'cap (ja hi eren)'}")
+
+
+def _migrate_to_v11(conn: sqlite3.Connection, log: Callable[[str], None]) -> None:
+    log("Migrant a la versió 11 (candidates: .psx i .files del comprovador)…")
+    conn.execute("BEGIN")
+    try:
+        added = _apply_v11(conn)
+        conn.execute("PRAGMA user_version = 11")
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

@@ -19,14 +19,18 @@ profunditat (<depth_map_sets>), núvol dens (<dense_clouds>), malla (<models>), 
 i model en tessel·les (<tiled_models>). Els chunks amb la mateixa etiqueta i el mateix conjunt
 de fotos que són en més d'un `.psx` van a l'informe de chunks repetits, i un `.psx` queda
 «absorbit» si tots els seus chunks són també en un altre `.psx` amb igual o més processament.
+L'anàlisi de repetits inclou els `.psx` de discs no connectats comprovats en passis anteriors
+(l'empremta del conjunt de fotos de cada chunk es guarda a `chunks_json`), i els torna a marcar.
 Estructura real del `.psx` documentada a docs/migracio.md.
 
 Eixida: taula `psx_check` (una fila per .psx, reescrita a cada execució; `photos_json` amb
 [ruta tal com la guarda el .psx, resolució, disc, ruta trobada, mida] per foto; `chunks_json`
 amb el detall per chunk), `data/rutes_metashape_AAAA-MM-DD.csv` (una fila per .psx) i
-`data/chunks_repetits_AAAA-MM-DD.csv` (una fila per chunk repetit i .psx). Resum per pantalla:
-`.psx` resolts del tot / parcials / orfes, els 20 amb més orfes, chunks repetits i `.psx`
-absorbits, i els discs no connectats (saltats).
+`data/chunks_repetits_AAAA-MM-DD.csv` (una fila per chunk repetit i .psx) i
+`data/files_absorbits_AAAA-MM-DD.csv` (una fila per .psx amb la mida de la seua .files i la
+categoria: absorbit, màxim del grup, orfe o il·legible). Resum per pantalla: `.psx` resolts
+del tot / parcials / orfes, els 20 amb més orfes, chunks repetits, `.psx` absorbits, TB de
+`.files` per categoria i els discs no connectats (saltats).
 
 Exemples (des de l'arrel del projecte):
   python tools/rutes_metashape.py                       # tots els .psx dels discs connectats
@@ -39,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import posixpath
@@ -71,6 +76,10 @@ CSV_COLUMNS = ["disc", "ruta", "format", "app", "app_original", "chunks", "frame
                "mida_files_bytes", "fitxers_files", "chunks_repetits", "absorbit", "absorbit_per", "notes"]
 REPEATS_COLUMNS = ["grup", "etiqueta", "cameres", "n_psx", "disc", "ruta_psx", "chunk_id", "alineades",
                    *PRODUCTS, "processament", "maxim_del_grup", "psx_absorbit", "absorbit_per"]
+FILES_COLUMNS = ["disc", "ruta", "categoria", "chunks", "cameres", "orfes", "chunks_repetits", "chunks_maxim",
+                 "fitxers_files", "bytes_files", "gb_files", "absorbit_per", "notes"]
+# Categories d'un .psx per a l'informe de .files (un .psx pot ser alhora orfe i absorbit).
+CAT_ABSORBED, CAT_MAX, CAT_ORPHAN, CAT_OTHER = "absorbit", "maxim", "orfe-illegible", "altre"
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +120,7 @@ def _read_zip_xml(path: str) -> ET.Element:
 
 
 class ChunkInfo:
-    __slots__ = ("id", "label", "enabled", "cameras", "aligned", "products", "models", "photos")
+    __slots__ = ("id", "label", "enabled", "cameras", "aligned", "products", "models", "photos", "_key", "_nphotos")
 
     def __init__(self, cid: str, label: str, enabled: bool):
         self.id = cid
@@ -122,6 +131,8 @@ class ChunkInfo:
         self.products: dict[str, bool] = dict.fromkeys(PRODUCTS, False)
         self.models = 0
         self.photos: list[tuple[str, int | None, str]] = []   # (ruta tal com es guarda, mida, carpeta del frame relativa al disc)
+        self._key: str | None = None      # empremta si ve de chunks_json (sense fotos en memòria)
+        self._nphotos = 0
 
     def score(self) -> int:
         return sum(1 for p in PRODUCTS if self.products[p])
@@ -131,10 +142,31 @@ class ChunkInfo:
         return self.aligned >= other.aligned and all(
             self.products[p] or not other.products[p] for p in PRODUCTS)
 
+    def photo_key(self) -> str | None:
+        """Empremta del conjunt de noms de foto (sense carpeta ni majúscules); None sense fotos."""
+        if not self.photos:
+            return None
+        names = sorted({posixpath.basename(p.replace("\\", "/")).lower() for p, _, _ in self.photos})
+        return hashlib.sha1("\n".join(names).encode("utf-8")).hexdigest()
+
     def as_json(self) -> dict[str, Any]:
         return {"id": self.id, "etiqueta": self.label, "activat": self.enabled, "cameres": self.cameras,
                 "alineades": self.aligned, "fotos": len(self.photos), "models": self.models,
-                "productes": [p for p in PRODUCTS if self.products[p]]}
+                "productes": [p for p in PRODUCTS if self.products[p]], "fotos_sha1": self.photo_key()}
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> "ChunkInfo":
+        """Reconstrueix el que l'anàlisi de repetits necessita d'un chunk desat a chunks_json."""
+        c = cls(str(d.get("id", "")), d.get("etiqueta") or "", bool(d.get("activat", True)))
+        c.cameras = int(d.get("cameres") or 0)
+        c.aligned = int(d.get("alineades") or 0)
+        c.models = int(d.get("models") or 0)
+        for p in d.get("productes") or []:
+            if p in c.products:
+                c.products[p] = True
+        c._key = d.get("fotos_sha1")   # type: ignore[attr-defined]
+        c._nphotos = int(d.get("fotos") or 0)   # type: ignore[attr-defined]
+        return c
 
 
 class PsxInfo:
@@ -391,7 +423,7 @@ def check_psx(conn: sqlite3.Connection, resolver: Resolver, drive: str, root: st
         "drives_involved": sorted(drives_involved), "files_count": files_n, "files_bytes": files_b,
         "notes": "; ".join(info.notes) if info.notes else None, "photos": photos,
         "chunk_infos": info.chunks, "chunks_detail": [c.as_json() for c in info.chunks],
-        "repeated_chunks": 0, "absorbed": 0, "absorbed_by": [],
+        "repeated_chunks": 0, "absorbed": 0, "absorbed_by": [], "max_chunks": 0,
     }
 
 
@@ -410,7 +442,8 @@ def _notes_json(r: dict[str, Any]) -> str:
     return json.dumps({"tool": TOOL_VERSION, "format": r["format"], "app_original": r["app_original"],
                        "frames": r["frames"], "counts": r["counts"], "drives": r["drives_involved"],
                        "files_count": r["files_count"], "files_bytes": r["files_bytes"],
-                       "chunks_repetits": r["repeated_chunks"], "absorbit": r["absorbed"],
+                       "chunks_repetits": r["repeated_chunks"], "chunks_maxim": r["max_chunks"],
+                       "categoria": psx_categories(r), "absorbit": r["absorbed"],
                        "absorbit_per": r["absorbed_by"], "notes": r["notes"]}, ensure_ascii=False)
 
 
@@ -418,10 +451,37 @@ def _notes_json(r: dict[str, Any]) -> str:
 # Chunks repetits i .psx absorbits
 # ---------------------------------------------------------------------------
 
-def _chunk_key(c: ChunkInfo) -> tuple[str, frozenset[str]] | None:
-    if not c.photos:
-        return None
-    return c.label, frozenset(posixpath.basename(p.replace("\\", "/")).lower() for p, _, _ in c.photos)
+def _chunk_key(c: ChunkInfo) -> tuple[str, str] | None:
+    key = c.photo_key() if c.photos else c._key
+    return (c.label, key) if key else None
+
+
+def _chunk_nphotos(c: ChunkInfo) -> int:
+    return len(c.photos) if c.photos else c._nphotos
+
+
+def load_stored_rows(conn: sqlite3.Connection, exclude_drives: set[str]) -> list[dict[str, Any]]:
+    """.psx comprovats en passis anteriors (discs no comprovats ara) amb el que cal per a l'anàlisi
+    de repetits: chunks des de chunks_json (amb empremta), càmeres, orfes i mida de la .files."""
+    out: list[dict[str, Any]] = []
+    ph = ",".join("?" * len(exclude_drives)) or "''"
+    for d, rel, chunks, cameras, orphans, chunks_json, notes in conn.execute(
+            "SELECT drive_id, relative_path, chunks, cameras, orphans, chunks_json, notes FROM psx_check"
+            f" WHERE drive_id NOT IN ({ph}) AND chunks_json IS NOT NULL", tuple(exclude_drives)):
+        try:
+            detail = json.loads(chunks_json)
+            n = json.loads(notes) if notes else {}
+        except json.JSONDecodeError:
+            continue
+        infos = [ChunkInfo.from_json(cj) for cj in detail]
+        if not any(_chunk_key(c) for c in infos):
+            continue   # passi antic sense empremta: no es pot comparar
+        out.append({"drive_id": d, "relative_path": rel, "chunks": chunks or 0, "cameras": cameras or 0,
+                    "orphans": orphans or 0, "files_bytes": int(n.get("files_bytes") or 0),
+                    "files_count": int(n.get("files_count") or 0), "notes": n.get("notes"),
+                    "chunk_infos": infos, "chunks_detail": detail, "repeated_chunks": 0, "absorbed": 0,
+                    "absorbed_by": [], "max_chunks": 0, "stored": True, "_notes": n})
+    return out
 
 
 def analyze_repeats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -453,7 +513,7 @@ def analyze_repeats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for r in rows:
         keyed = [c for c in r["chunk_infos"] if _chunk_key(c) in repeated]
         r["repeated_chunks"] = len(keyed)
-        with_photos = [c for c in r["chunk_infos"] if c.photos]
+        with_photos = [c for c in r["chunk_infos"] if _chunk_nphotos(c)]
         if with_photos and all(dominated_by.get((id(r), id(c))) for c in with_photos):
             r["absorbed"] = 1
             by: set[tuple[str, str]] = set()
@@ -466,16 +526,48 @@ def analyze_repeats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 cj["repetit_a"] = sorted(f"{r2['drive_id']}:{r2['relative_path']}" for r2, _ in repeated[k] if r2 is not r)
                 cj["dominat_per"] = sorted(f"{d}:{p}" for d, p in dominated_by.get((id(r), id(c)), set()))
 
+    for r in rows:
+        r["max_chunks"] = 0
     out: list[dict[str, Any]] = []
     for gi, (k, members) in enumerate(sorted(repeated.items(), key=lambda kv: (-len(kv[1]), kv[0][0])), 1):
         best = max(c.score() for _, c in members)
+        for r, c in members:
+            if c.score() == best:
+                r["max_chunks"] += 1
+                for cj in r["chunks_detail"]:
+                    if cj["id"] == c.id:
+                        cj["maxim_del_grup"] = True
         for r, c in sorted(members, key=lambda rc: (rc[0]["drive_id"], rc[0]["relative_path"], rc[1].id)):
-            out.append({"grup": gi, "etiqueta": c.label, "cameres": len(k[1]), "n_psx": len({id(r2) for r2, _ in members}),
+            out.append({"grup": gi, "etiqueta": c.label, "cameres": _chunk_nphotos(c), "n_psx": len({id(r2) for r2, _ in members}),
                         "disc": r["drive_id"], "ruta_psx": r["relative_path"], "chunk_id": c.id,
                         "alineades": c.aligned, **{p: int(c.products[p]) for p in PRODUCTS},
                         "processament": c.score(), "maxim_del_grup": int(c.score() == best),
                         "psx_absorbit": r["absorbed"], "absorbit_per": ", ".join(r["absorbed_by"])})
     return out
+
+
+def psx_categories(r: dict[str, Any]) -> list[str]:
+    """Categories de l'informe de .files: absorbit; no absorbit amb algun chunk màxim del seu grup;
+    orfe (totes les càmeres orfes) o il·legible (sense càmeres); altre si cap."""
+    cats = []
+    if r["absorbed"]:
+        cats.append(CAT_ABSORBED)
+    elif r["max_chunks"]:
+        cats.append(CAT_MAX)
+    if not r["cameras"] or r["orphans"] == r["cameras"]:
+        cats.append(CAT_ORPHAN)
+    return cats or [CAT_OTHER]
+
+
+def write_files_csv(rows: list[dict[str, Any]], path: Path) -> None:
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, delimiter=";", lineterminator="\r\n")
+        w.writerow(FILES_COLUMNS)
+        for r in sorted(rows, key=lambda r: -r["files_bytes"]):
+            w.writerow([r["drive_id"], r["relative_path"], ", ".join(psx_categories(r)), r["chunks"], r["cameras"],
+                        r["orphans"], r["repeated_chunks"], r["max_chunks"], r["files_count"], r["files_bytes"],
+                        f"{r['files_bytes'] / 1e9:.2f}".replace(".", ","), ", ".join(r["absorbed_by"]),
+                        r["notes"] or ""])
 
 
 def write_repeats_csv(rep: list[dict[str, Any]], path: Path) -> None:
@@ -551,7 +643,19 @@ def print_summary(rows: list[dict[str, Any]], rep: list[dict[str, Any]],
     absorbed = [r for r in rows if r["absorbed"]]
     log("")
     log(f"== chunks repetits (mateixa etiqueta i mateixes fotos en més d'un .psx): {len(groups):,} grups,"
-        f" {len(rep):,} chunks; .psx absorbits: {len(absorbed):,} de {len(rows):,}")
+        f" {len(rep):,} chunks; .psx absorbits: {len(absorbed):,} de {len(rows):,} (inclosos els de passis anteriors)")
+    total_files = sum(r["files_bytes"] for r in rows)
+    by_cat: dict[str, list[int]] = {c: [0, 0] for c in (CAT_ABSORBED, CAT_MAX, CAT_ORPHAN, CAT_OTHER)}
+    for r in rows:
+        for c in psx_categories(r):
+            by_cat[c][0] += 1
+            by_cat[c][1] += r["files_bytes"]
+    log(f"   .files segons l'inventari: {total_files / 1e12:.2f} TB en {len(rows):,} .psx")
+    log(f"   (a) .psx absorbits:                               {by_cat[CAT_ABSORBED][0]:5,}  {by_cat[CAT_ABSORBED][1] / 1e12:6.2f} TB")
+    log(f"   (b) no absorbits amb algun chunk màxim del grup:  {by_cat[CAT_MAX][0]:5,}  {by_cat[CAT_MAX][1] / 1e12:6.2f} TB")
+    log(f"   (c) orfes del tot o il·legibles:                  {by_cat[CAT_ORPHAN][0]:5,}  {by_cat[CAT_ORPHAN][1] / 1e12:6.2f} TB")
+    log(f"       altres (ni repetits ni orfes):                {by_cat[CAT_OTHER][0]:5,}  {by_cat[CAT_OTHER][1] / 1e12:6.2f} TB")
+    log("   els 20 .psx absorbits amb la .files més gran, i per qui:")
     for r in sorted(absorbed, key=lambda r: (-r['files_bytes'], r['drive_id'], r['relative_path']))[:20]:
         log(f"   {r['files_bytes'] / 1e9:7.1f} GB  {r['drive_id']:<10} {r['relative_path'][:60]:<60} ← "
             + ", ".join(r["absorbed_by"][:3]) + (" …" if len(r["absorbed_by"]) > 3 else ""))
@@ -639,12 +743,22 @@ def main(argv: list[str] | None = None) -> int:
             rows.append(r)
             print(f"\r{i:5}/{len(targets)}  {time.time() - t0:5.0f} s  {d} {rel[-60:]:<60}", end="", flush=True)
         print()
-        rep = analyze_repeats(rows)
+        stored = load_stored_rows(conn, set(wanted))
+        rep = analyze_repeats(rows + stored)
         for r in rows:   # segona passada: chunks repetits i absorció, que necessiten tot el conjunt
             conn.execute("UPDATE psx_check SET chunks_json = ?, notes = ? WHERE drive_id = ? AND relative_path = ?",
                          (json.dumps(r["chunks_detail"], ensure_ascii=False), _notes_json(r),
                           r["drive_id"], r["relative_path"]))
+        for r in stored:   # els de passis anteriors: només es refresquen repetits i absorció
+            n = r["_notes"]
+            n.update({"chunks_repetits": r["repeated_chunks"], "chunks_maxim": r["max_chunks"],
+                      "categoria": psx_categories(r), "absorbit": r["absorbed"], "absorbit_per": r["absorbed_by"]})
+            conn.execute("UPDATE psx_check SET chunks_json = ?, notes = ? WHERE drive_id = ? AND relative_path = ?",
+                         (json.dumps(r["chunks_detail"], ensure_ascii=False), json.dumps(n, ensure_ascii=False),
+                          r["drive_id"], r["relative_path"]))
         conn.commit()
+        if stored:
+            print(f"Inclosos a l'anàlisi de repetits {len(stored):,} .psx de passis anteriors (discs no connectats ara).")
         if rows and not args.no_csv:
             args.csv_dir.mkdir(parents=True, exist_ok=True)
             stamp = f"{datetime.now():%Y-%m-%d}"
@@ -652,8 +766,10 @@ def main(argv: list[str] | None = None) -> int:
             write_csv(rows, out)
             out2 = args.csv_dir / f"chunks_repetits_{stamp}.csv"
             write_repeats_csv(rep, out2)
-            print(f"CSV: {out} ({len(rows):,} files); {out2} ({len(rep):,} files)")
-        print_summary(rows, rep, skipped, skipped_psx)
+            out3 = args.csv_dir / f"files_absorbits_{stamp}.csv"
+            write_files_csv(rows + stored, out3)
+            print(f"CSV: {out} ({len(rows):,} files); {out2} ({len(rep):,} files); {out3} ({len(rows):,} files)")
+        print_summary(rows + stored, rep, skipped, skipped_psx)
         print(f"\nTemps total: {time.time() - t0:.0f} s")
         return 0
     finally:
