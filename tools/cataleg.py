@@ -47,6 +47,8 @@ MIN_CANDIDATE_BYTES = 1_000_000_000   # «pesa ≥ 1 GB» (decimal, com les xifr
 COPY_MIN_SIZE = 1_048_576             # clau de còpia només per a fitxers ≥ 1 MiB (criteri de l'auditoria)
 DOMINANT_SHARE = 0.90                 # classe dominant: > 90 % dels bytes
 SAME_CONTENT_SHARE = 0.50             # disc amb el mateix contingut: ≥ 50 % dels bytes hi tenen còpia
+CONTENT_MIN_VOTES = 5                 # vot per contingut: fitxers de projecte votants com a mínim
+CONTENT_MIN_SHARE = 0.60              # … i quota mínima de la sèrie guanyadora
 MAX_CONTAINER_DEPTH = 4               # els contenidors del vocabulari es busquen fins a aquesta profunditat
 CLASSES = schema.ANALYSIS_CLASSES
 SERIE_ORDER = {"lloc": 0, "programa": 1, "client": 2, "tipus": 3, "varis": 4}
@@ -127,42 +129,65 @@ class Vocab:
             return "sistema"
         return None
 
+    def _serie_in_component(self, s: dict[str, Any], folded: str, toks: list[str]) -> str | None:
+        """Text de la coincidència d'una sèrie en un component de ruta, o None."""
+        for kw in s["keywords"]:
+            lit = s["literal_re"].get(kw)
+            if lit is not None:
+                m = lit.search(folded)
+                if m:
+                    t = RE_NONALNUM.split(folded[m.start():], 1)[0]
+                    return kw if t == kw else f"{kw} ({t})"
+                continue
+            for t in toks:
+                if keyword_matches(kw, t):
+                    return kw if t == kw else f"{kw} ({t})"
+        return None
+
     def match_serie(self, path: str) -> tuple[str, str | None]:
-        """(sèrie, paraula que ha coincidit) per precedència; ('varis', None) si cap."""
-        toks = tokens(path)
-        folded = fold(path)
-        for s in self.series:
-            for kw in s["keywords"]:
-                lit = s["literal_re"].get(kw)
-                if lit is not None:
-                    m = lit.search(folded)
-                    if m:
-                        t = RE_NONALNUM.split(folded[m.start():], 1)[0]
-                        return s["name"], kw if t == kw else f"{kw} ({t})"
-                    continue
-                for t in toks:
-                    if keyword_matches(kw, t):
-                        return s["name"], kw if t == kw else f"{kw} ({t})"
-        return "varis", None
+        """(sèrie, serie_match) d'una ruta. Si coincideixen diverses sèries, guanya la que ho fa
+        al component de ruta més profund (el més pròxim al candidat); en empat al mateix
+        component, la primera per precedència (lloc > programa > client > tipus). serie_match
+        diu la paraula guanyadora (i el token) i, darrere de «perd:», les sèries que han perdut.
+        ('varis', None) si cap."""
+        best: dict[str, tuple[int, int, str, str]] = {}   # sèrie -> (profunditat, precedència, sèrie, text)
+        for depth, comp in enumerate(path.split(SEP)):
+            folded = fold(comp)
+            toks = tokens(comp)
+            for rank, s in enumerate(self.series):
+                text = self._serie_in_component(s, folded, toks)
+                if text:
+                    best[s["name"]] = (depth, rank, s["name"], text)   # la més profunda mana
+        if not best:
+            return "varis", None
+        hits = sorted(best.values(), key=lambda h: (-h[0], h[1]))
+        winner = hits[0]
+        losers = [h for h in hits[1:] if h[2] != winner[2]]
+        match = winner[3]
+        if losers:
+            match += " | perd: " + ", ".join(f"{h[2]}: {h[3]}" for h in losers)
+        return winner[2], match
 
     def match_serie_in_names(self, names: list[str]) -> tuple[str, str | None]:
-        """Sèrie majoritària entre els noms (subcarpetes i fitxers de projecte d'un candidat):
-        cada nom vota per la seua sèrie (mateixa precedència); guanya la que té més de la meitat
-        dels vots. serie_match: «dins: paraula (token) n/m». ('varis', None) si no n'hi ha."""
+        """Vot per contingut: cada fitxer de projecte d'un candidat vota per la sèrie del seu nom
+        (ruta relativa al candidat, mateixa regla que match_serie). S'assigna la guanyadora
+        només amb CONTENT_MIN_VOTES vots com a mínim i CONTENT_MIN_SHARE o més dels vots:
+        serie_match «dins: paraula (token) n/m». Si no, ('varis', «suggerit: sèrie n/m»);
+        ('varis', None) sense cap vot."""
         votes: dict[str, int] = {}
         example: dict[str, str] = {}
         for n in names:
             serie, match = self.match_serie(n)
             if match:
                 votes[serie] = votes.get(serie, 0) + 1
-                example.setdefault(serie, match)
+                example.setdefault(serie, match.split(" | perd:", 1)[0])
         if not votes:
             return "varis", None
         best = max(votes, key=votes.get)
         total = sum(votes.values())
-        if votes[best] * 2 <= total:
-            return "varis", None
-        return best, f"dins: {example[best]} {votes[best]}/{total}"
+        if total >= CONTENT_MIN_VOTES and votes[best] >= CONTENT_MIN_SHARE * total:
+            return best, f"dins: {example[best]} {votes[best]}/{total}"
+        return "varis", f"suggerit: {best} {votes[best]}/{total}"
 
     def match_layer(self, folder_name: str) -> str | None:
         toks = tokens(folder_name)
@@ -313,7 +338,16 @@ def detect_candidates(conn: sqlite3.Connection, drive_id: str, vocab: Vocab) -> 
     """Carpetes candidates d'un disc (model §10 i especificació §1 pas 2), per ruta."""
     folders = conn.execute(
         "SELECT folder_path, total_bytes FROM folder_stats WHERE drive_id = ?", (drive_id,)).fetchall()
-    # Contenidors del vocabulari (fins a MAX_CONTAINER_DEPTH) i els seus ancestres: mai candidats.
+    # Carpetes amb un fitxer de projecte directe, a qualsevol profunditat (índex drive_id, extension).
+    marker_folders: set[str] = set()
+    for (rel,) in conn.execute(
+            f"SELECT relative_path FROM inventory WHERE drive_id = ? AND extension IN ({MARKER_PH})"
+            " AND missing_since_utc IS NULL AND (extension != '.pts' OR size_bytes < ?)",
+            (drive_id, *MARKER_EXTENSIONS, PTS_PROJECT_MAX_BYTES)):
+        marker_folders.add(parent_of(rel))
+
+    # Contenidors del vocabulari (fins a MAX_CONTAINER_DEPTH) i els seus ancestres: mai candidats
+    # (tampoc si tenen un fitxer de projecte directe: els seus fitxers van al residu del disc).
     containers: set[str] = set()
     for fp, _ in folders:
         if fp and fp.count(SEP) < MAX_CONTAINER_DEPTH and vocab.is_container(fp):
@@ -352,12 +386,8 @@ def detect_candidates(conn: sqlite3.Connection, drive_id: str, vocab: Vocab) -> 
         elif rec_bytes >= MIN_CANDIDATE_BYTES:
             cands[fp] = Cand(drive_id, fp, "projecte", False)
 
-    # Carpetes amb un fitxer de projecte directe, a qualsevol profunditat (índex drive_id, extension).
-    for (rel,) in conn.execute(
-            f"SELECT relative_path FROM inventory WHERE drive_id = ? AND extension IN ({MARKER_PH})"
-            " AND missing_since_utc IS NULL AND (extension != '.pts' OR size_bytes < ?)",
-            (drive_id, *MARKER_EXTENSIONS, PTS_PROJECT_MAX_BYTES)):
-        fp = parent_of(rel)
+    # Les carpetes amb fitxer de projecte directe són candidats sempre.
+    for fp in sorted(marker_folders):
         if not fp or fp in excluded or inside_files(fp):
             continue
         c = cands.get(fp)
@@ -447,15 +477,12 @@ def aggregate_drive(conn: sqlite3.Connection, drive_id: str, cands: dict[str, Ca
 # Pas 3: proposta
 # ---------------------------------------------------------------------------
 
-def content_names(conn: sqlite3.Connection, c: Cand, levels: int = 3) -> list[str]:
-    """Noms (relatius al candidat) de les subcarpetes fins a `levels` nivells i dels fitxers de
-    projecte que conté: rang de l'índex (drive_id, folder_path) i de (drive_id, extension)."""
+def content_names(conn: sqlite3.Connection, c: Cand) -> list[str]:
+    """Rutes (relatives al candidat) dels fitxers de projecte que conté: rang de l'índex únic
+    (drive_id, relative_path) filtrat per extensió."""
     lo = c.path + SEP
     hi = lo[:-1] + chr(ord(SEP) + 1)   # «]»: límit superior exclusiu del rang de prefix
-    names = [fp[len(lo):] for (fp,) in conn.execute(
-        "SELECT folder_path FROM folder_stats WHERE drive_id = ? AND folder_path >= ? AND folder_path < ?",
-        (c.drive, lo, hi)) if fp.count(SEP) < c.depth + levels]
-    names += [rel[len(lo):] for (rel,) in conn.execute(
+    names = [rel[len(lo):] for (rel,) in conn.execute(
         f"SELECT relative_path FROM inventory WHERE drive_id = ? AND extension IN ({MARKER_PH})"
         " AND missing_since_utc IS NULL AND relative_path >= ? AND relative_path < ?"
         " AND (extension != '.pts' OR size_bytes < ?)",
@@ -503,6 +530,12 @@ def propose(c: Cand, vocab: Vocab, drive_of_bit: dict[int, str],
         pr = c.parent.row
         for k in ("proposed_serie", "serie_match", "proposed_project", "proposed_year", "canonical_proposed"):
             row[k] = pr.get(k)
+        # La capa té sèrie pròpia si la seua ruta en diu una (el component més profund mana):
+        # si difereix de la del projecte pare, és el senyal que el pare agrupa diversos llocs.
+        serie, match = vocab.match_serie(c.path)
+        if match and serie != pr.get("proposed_serie"):
+            row["proposed_serie"] = serie
+            row["serie_match"] = f"{match} | pare: {pr.get('proposed_serie')}"
     elif c.kind == "recuperacio":
         row["proposed_serie"], row["proposed_project"] = "varis", RECUP_PROJECT
         row["proposed_year"] = int(RECUP_PROJECT[:4])
@@ -510,6 +543,7 @@ def propose(c: Cand, vocab: Vocab, drive_of_bit: dict[int, str],
         serie, match = vocab.match_serie(c.path)
         if match is None and conn is not None and vocab.serie_from_content:
             serie, match = vocab.match_serie_in_names(content_names(conn, c))
+            # «suggerit:» deixa la sèrie a varis però conserva la pista a serie_match
         row["proposed_serie"], row["serie_match"] = serie, match
         year = year_from_name(c.name)
         p = parent_of(c.path)
@@ -741,12 +775,13 @@ def print_summary(rows: list[dict[str, Any]], log=print) -> dict[str, Any]:
     for r in proj:
         by_serie[r["proposed_serie"] or "?"][0] += 1
         by_serie[r["proposed_serie"] or "?"][1] += r["total_bytes"]
-        if r["serie_match"]:
+        if r["serie_match"] and not r["serie_match"].startswith("suggerit:"):
             matched_bytes += r["total_bytes"]
     for s, (n, b) in sorted(by_serie.items(), key=lambda kv: -kv[1][1]):
         log(f"   {s:<20} {n:5,} {b / 1e12:8.2f} TB {100 * b / proj_bytes if proj_bytes else 0:5.1f} %")
     pct_matched = 100 * matched_bytes / proj_bytes if proj_bytes else 0
-    path_bytes = sum(r["total_bytes"] for r in proj if r["serie_match"] and not r["serie_match"].startswith("dins:"))
+    path_bytes = sum(r["total_bytes"] for r in proj if r["serie_match"]
+                     and not r["serie_match"].startswith(("dins:", "suggerit:")))
     fora_bytes = sum(r["total_bytes"] for r in proj if r["proposed_layer"] == "FORA" and not r["serie_match"])
     log(f"   amb serie_match: {matched_bytes / 1e12:.2f} TB de {proj_bytes / 1e12:.2f} TB ({pct_matched:.1f} %):"
         f" per la ruta {100 * path_bytes / proj_bytes if proj_bytes else 0:.1f} %,"
@@ -758,7 +793,7 @@ def print_summary(rows: list[dict[str, Any]], log=print) -> dict[str, Any]:
     log("")
     log(f"== Candidats a «varis»: {len(varis):,} ({sum(r['total_bytes'] for r in varis) / 1e12:.2f} TB); els 20 més grans")
     for r in varis[:20]:
-        log(f"   {r['total_bytes'] / 1e9:8.1f} GB  {r['drive_id']:<10} {r['relative_path'][:70]}")
+        log(f"   {r['total_bytes'] / 1e9:8.1f} GB  {r['drive_id']:<10} {r['relative_path'][:60]:<60} {r['serie_match'] or ''}")
     return {"rows": len(rows), "total_bytes": total_bytes, "proj_bytes": proj_bytes,
             "pct_serie_matched": pct_matched, "by_kind": dict(by_kind)}
 

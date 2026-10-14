@@ -62,7 +62,7 @@ tipus admesos). Claus:
 | `layer_words` | per a `RAW`, `OUT`, `PROJ` i `DOC`, les paraules del nom de carpeta que proposen la capa quan la classe dominant no decideix (confiança `nom`). |
 | `system_names` | noms de carpeta (minúscules) que són residu de sistema: candidat `sistema`. Qualsevol nom que continga `recycle` també. |
 | `recovery_pattern` | expressió regular dels noms de recuperació de disc (`found.000`): candidat `recuperacio`. |
-| `serie_from_content` | `true` (per defecte) o `false`: si la ruta del candidat no conté cap paraula clau, buscar-ne als noms de les seues subcarpetes (3 nivells) i dels seus fitxers de projecte (vegeu el pas 3). |
+| `serie_from_content` | `true` (per defecte) o `false`: si la ruta del candidat no conté cap paraula clau, fer votar els seus fitxers de projecte (vegeu el pas 3). |
 | `devices` | vocabulari tancat de dispositius del model §6 (informatiu; el catàleg no el fa servir encara). |
 
 **Coincidència de paraules clau.** La ruta del candidat es normalitza (minúscules, sense accents)
@@ -96,7 +96,9 @@ classificació.
 **Pas 2, candidats** (model §10). Per disc:
 
 1. Contenidors: carpetes que coincideixen amb `containers`; ni elles ni els seus ancestres són
-   candidats. L'arrel del disc actua sempre com a contenidor del nivell 1.
+   candidats, ni que tinguen un fitxer de projecte directe (els seus fitxers directes i les
+   `.files` van al residu del disc: vigileu que cap patró encaixe amb una carpeta de projecte,
+   com `FTGM_GENERAL_DW`). L'arrel del disc actua sempre com a contenidor del nivell 1.
 2. Carpetes elegibles per estructura: les de nivell 1 del disc i les de nivell 1 o 2 sota un
    contenidor, llevat de les `.files` de Metashape (s'adjunten al seu `.psx`). Són candidats si
    pesen ≥ 1 GB (recursiu, calculat des de `folder_stats`), o sempre si són de sistema o de
@@ -121,16 +123,22 @@ columnes: es recalculen amb hash abans del pas E.
 
 **Pas 3, proposta.**
 
-- `proposed_serie` i `serie_match`: primera sèrie del vocabulari, en ordre de precedència
-  (lloc → programa → client → tipus), amb una paraula clau a la ruta del candidat; `serie_match`
-  diu la paraula (i el token, si no és idèntic: `dw (dw23)`). Si la ruta no diu res i
-  `serie_from_content` és actiu, cada subcarpeta (fins a 3 nivells) i cada fitxer de projecte
-  del candidat vota per la sèrie del seu nom amb la mateixa regla; guanya la que té més de la
-  meitat dels vots, i `serie_match` ho marca com a `dins: kuelap 50/50` (paraula, vots a favor /
-  vots totals) per poder-ho auditar: és una pista més feble (una carpeta `METASHAPE` amb
-  projectes de diversos llocs pot caure al lloc majoritari). Sense cap coincidència, `varis` amb
-  `serie_match` buit. Les capes hereten sèrie, projecte i any del pare; `recuperacio` va a
-  `varis` / `2025_recuperacio-raid` (model §11).
+- `proposed_serie` i `serie_match`: sèries del vocabulari amb una paraula clau a la ruta del
+  candidat. Si n'hi ha més d'una, guanya la que coincideix al component de ruta més profund (el
+  més pròxim al candidat: a `PROJECTES2022\FGM\poterna_montesa` guanya `montesa` sobre
+  `diablo-wasi`); en empat al mateix component, la primera per precedència (lloc → programa →
+  client → tipus). `serie_match` diu la paraula guanyadora (i el token, si no és idèntic:
+  `dw (dw23)`) i, darrere de `perd:`, les sèries que han perdut amb la seua paraula. Si la ruta
+  no diu res i `serie_from_content` és actiu, cada fitxer de projecte del candidat vota per la
+  sèrie de la seua ruta relativa amb la mateixa regla; la guanyadora s'assigna només amb 5 vots
+  com a mínim i el 60 % o més dels vots (`CONTENT_MIN_VOTES`, `CONTENT_MIN_SHARE`), marcada
+  `dins: covetes 51/51` (paraula, vots a favor / vots totals); si no arriba al llindar, el
+  candidat queda a `varis` amb `serie_match = suggerit: sèrie n/m` perquè la revisió tinga la
+  pista. Sense cap coincidència, `varis` amb `serie_match` buit. Les capes hereten sèrie,
+  projecte i any del pare, però si la seua pròpia ruta diu una sèrie diferent
+  (`PROJECTES2022\\FGM\\poterna_montesa` → `montesa` dins d'un pare `diablo-wasi`), la capa es
+  queda amb la seua i `serie_match` acaba amb `| pare: diablo-wasi`: és el senyal que la carpeta
+  pare agrupa diversos llocs. `recuperacio` va a `varis` / `2025_recuperacio-raid` (model §11).
 - `proposed_year`: any del nom de la carpeta (`2024-covetes`, `25-05-28_...`, `DW23`, `TFM26`),
   si no, del nom d'un contenidor ancestre (`PROJ26`, `FOT-VID25`, `PROJECTES2022`), si no, el
   mínim `modified_utc` dels fitxers ORIG; si no n'hi ha, dels PROJ; si no, dels PROD i DOC; en
@@ -165,7 +173,7 @@ capes són part del seu projecte, per no comptar dues vegades), el repartiment p
 capa, les sèries proposades amb bytes i el percentatge de bytes de projecte amb `serie_match`,
 i els 20 candidats més grans que han caigut a `varis` (la llista per ampliar el vocabulari).
 La línia «amb serie_match» desglossa el percentatge de bytes de projecte trobats per la ruta i
-pel contingut, i el percentatge sense comptar els `varis` de capa `FORA` (imatges de disc,
+pel contingut (els `suggerit:` no hi compten), i el percentatge sense comptar els `varis` de capa `FORA` (imatges de disc,
 programari), que no són material d'arxiu.
 
 ## Verificació feta (14/10/2026)
