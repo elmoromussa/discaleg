@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sqlite3
 import sys
 import time
@@ -33,7 +34,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from app import queries_spaces, schema  # noqa: E402
 from app.config import database_path  # noqa: E402
-from app.queries_arxiu import ROLE_NONE, SEP, ArxiuCalc  # noqa: E402
+from app.queries_arxiu import ROLE_NONE, SEP, ArxiuCalc, member_virtual_path  # noqa: E402
 from app.queries_spaces import SUBPATH_ROOT, SpaceError  # noqa: E402
 from app.schema import PROJECT_LAYERS  # noqa: E402
 
@@ -453,6 +454,120 @@ def export_csv(calc: ArxiuCalc, path: Path) -> int:
     return n
 
 
+PLAN_FORMAT = "discaleg-pla-arxiu/1"
+# Paper -> llista del pla (docs/arxiu-virtual.md)
+PLAN_LISTS = {"canonica": "copiar", "part": "copiar", "tercers": "copiar", "copia": "verificar",
+              "descartar": "esborrar", "quarantena": "quarantena", None: "pendents"}
+
+
+def export_plan(calc: ArxiuCalc, conn: sqlite3.Connection, path: Path, db_path: Path) -> dict[str, Any]:
+    """Escriu el pla de l'arxiu virtual per a tools/executor.py (format a docs/arxiu-virtual.md)."""
+    totals = calc.item_totals()
+    uniq = calc.item_unique()
+    calc._build_segments()
+    children: dict[int, list[int]] = {}
+    for iid, parent in calc.item_parent.items():
+        if parent is not None:
+            children.setdefault(parent, []).append(iid)
+    drives = {}
+    for r in conn.execute("SELECT drive_id, label, serial_number, volume_serial, filesystem, last_root_path, "
+                          "capacity_bytes, files_count, total_bytes FROM drives ORDER BY drive_id"):
+        drives[r["drive_id"]] = {k: r[k] for k in r.keys() if k != "drive_id"}
+
+    def ancestors(sid: int) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        cur = calc.spaces.get(sid)
+        while cur is not None:
+            out.setdefault(cur["archive_kind"], cur)
+            cur = calc.spaces.get(cur["parent_id"]) if cur["parent_id"] is not None else None
+        return out
+
+    spaces = []
+    for sid, s in sorted(calc.spaces.items(), key=lambda kv: kv[1]["virtual_path"].lower()):
+        anc = ancestors(sid)
+        spaces.append({
+            "space_id": sid, "kind": s["archive_kind"], "target_name": s["target_name"],
+            "target_path": s["virtual_path"], "parent_id": s["parent_id"] if s["parent_id"] in calc.spaces else None,
+            "fons_id": anc["fons"]["space_id"] if "fons" in anc else None,
+            "serie_id": anc["serie"]["space_id"] if "serie" in anc else None,
+            "project_id": anc["projecte"]["space_id"] if "projecte" in anc else None,
+            "layer": anc["capa"]["target_name"] if "capa" in anc else None,
+            "state": s["state"], "canonical_drive_id": s["canonical_drive_id"],
+            "description": s["description"], "source": s["source"],
+        })
+    lists: dict[str, list[dict[str, Any]]] = {v: [] for v in PLAN_LISTS.values()}
+    n = 0
+    for m in sorted(calc.members, key=lambda m: (calc.spaces[m["space_id"]]["virtual_path"].lower(),
+                                                 m["drive_id"], m["relative_path"])):
+        n += 1
+        it = calc.items[m["item_id"]]
+        s = calc.spaces[m["space_id"]]
+        anc = ancestors(m["space_id"])
+        t = totals.get(m["item_id"], {"files": 0, "bytes": 0})
+        u = uniq.get(m["item_id"], {"big_bytes": 0, "drive_unique_bytes": 0})
+        prefix = it["relative_path"] + SEP
+        excludes = [calc.items[c]["relative_path"][len(prefix):] for c in children.get(m["item_id"], [])
+                    if calc.items[c]["relative_path"].startswith(prefix)]
+        parent = calc.item_parent.get(m["item_id"])
+        entry = {
+            "id": f"m{m['item_id']}-s{m['space_id']}", "item_id": m["item_id"], "space_id": m["space_id"],
+            "role": m["role"],
+            "source": {"drive_id": it["drive_id"], "path": it["relative_path"], "kind": it["kind"],
+                       "exclude": sorted(excludes),
+                       "nested_in": (f"{calc.items[parent]['drive_id']}\\{calc.items[parent]['relative_path']}"
+                                     if parent is not None else None)},
+            "target_path": s["virtual_path"], "target_subpath": m["target_subpath"],
+            "destination": member_virtual_path(s["virtual_path"], m),
+            "project_id": anc["projecte"]["space_id"] if "projecte" in anc else None,
+            "project_path": anc["projecte"]["virtual_path"] if "projecte" in anc else None,
+            "layer": anc["capa"]["target_name"] if "capa" in anc else None,
+            "files": t["files"], "bytes": t["bytes"],
+            "unique_bytes": u["drive_unique_bytes"] + max(0, t["bytes"] - u["big_bytes"]),
+            "note": m["note"],
+        }
+        lists[PLAN_LISTS.get(m["role"], "pendents")].append(entry)
+    # per a cada «copia»: les canòniques del mateix projecte (o espai) contra les quals verificar
+    canon_by_project: dict[int | None, list[str]] = {}
+    for e in lists["copiar"]:
+        if e["role"] == "canonica":
+            canon_by_project.setdefault(e["project_id"] if e["project_id"] is not None else e["space_id"], []).append(e["id"])
+    for e in lists["verificar"]:
+        e["canonical"] = canon_by_project.get(e["project_id"] if e["project_id"] is not None else e["space_id"], [])
+    projects = []
+    for sp in spaces:
+        if sp["kind"] != "projecte":
+            continue
+        pid = sp["space_id"]
+        tot = calc.space_totals(pid)
+        by_list = {k: [e["id"] for e in v if e["project_id"] == pid] for k, v in lists.items()}
+        serie = next((x for x in spaces if x["space_id"] == sp["serie_id"]), None)
+        projects.append({
+            "space_id": pid, "target_path": sp["target_path"], "name": sp["target_name"],
+            "year": int(sp["target_name"][:4]) if sp["target_name"][:4].isdigit() else None,
+            "serie": serie["target_name"] if serie else None, "state": sp["state"],
+            "canonical_drive_id": sp["canonical_drive_id"] or (serie["canonical_drive_id"] if serie else None),
+            "layers": {x["target_name"]: x["space_id"] for x in spaces if x["kind"] == "capa" and x["parent_id"] == pid},
+            "files": tot["files"], "bytes": tot["bytes"], "unique_bytes": tot["unique_bytes"],
+            "members": by_list,
+            "sources": sorted({f"{e['source']['drive_id']}\\{e['source']['path']}" for e in lists["copiar"] if e["project_id"] == pid}),
+        })
+    findings = calc.check()
+    plan = {
+        "format": PLAN_FORMAT, "generated_utc": schema.utc_now_iso(), "database": str(db_path),
+        "schema_version": schema.get_user_version(conn),
+        "conflicts": {"errors": sum(1 for f in findings if f["severity"] == "error"),
+                      "avisos": sum(1 for f in findings if f["severity"] != "error")},
+        "drives": drives, "spaces": spaces, "projects": projects,
+        "copiar": lists["copiar"], "verificar": lists["verificar"], "esborrar": lists["esborrar"],
+        "quarantena": lists["quarantena"], "pendents": lists["pendents"],
+    }
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(plan, f, ensure_ascii=False, indent=1)
+    return {"spaces": len(spaces), "projects": len(projects), "members": n,
+            "lists": {k: (len(v), sum(e["bytes"] for e in v)) for k, v in lists.items()},
+            "conflicts": plan["conflicts"]}
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -470,8 +585,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--coverage", metavar="DISC", default=None, help="Cobertura d'un disc (o «all»)")
     ap.add_argument("--check", action="store_true", help="Conflictes")
     ap.add_argument("--export", type=Path, metavar="CSV", help="Exporta el CSV de conjunts des dels espais")
+    ap.add_argument("--export-plan", type=Path, metavar="JSON",
+                    help="Escriu el pla per a tools/executor.py (docs/arxiu-virtual.md); es nega si hi ha errors a --check")
+    ap.add_argument("--force", action="store_true", help="Amb --export-plan: escriu el pla encara que hi haja errors")
     args = ap.parse_args(argv)
-    if not (args.import_csv or args.tree or args.coverage or args.check or args.export):
+    if not (args.import_csv or args.tree or args.coverage or args.check or args.export or args.export_plan):
         ap.print_help()
         return 2
     if not args.db.is_file():
@@ -492,9 +610,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"({time.time() - t0:.1f} s)")
             if res["errors"]:
                 rc = 1
-        if args.tree or args.coverage or args.check or args.export:
+        if args.tree or args.coverage or args.check or args.export or args.export_plan:
             t0 = time.time()
             calc = ArxiuCalc(conn)
+            if args.export_plan:
+                res = export_plan(calc, conn, args.export_plan, args.db)
+                print(f"Pla: {res['spaces']} espais, {res['projects']} projectes, {res['members']} membres → {args.export_plan}")
+                for k, (nn, b) in res["lists"].items():
+                    print(f"  {k:<10} {nn:>4} membres  {fmt_bytes(b):>10}")
+                c = res["conflicts"]
+                print(f"  conflictes: {c['errors']} errors, {c['avisos']} avisos")
+                if c["errors"] and not args.force:
+                    args.export_plan.unlink(missing_ok=True)
+                    print("Hi ha errors a --check: el pla no s'ha escrit (usa --force per escriure'l igualment).")
+                    rc = 1
             if args.check:
                 if print_check(calc):
                     rc = 1

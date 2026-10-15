@@ -51,7 +51,7 @@ Tres eines dins del repositori discaleg, que implementen el model d'arxiu v1.3 (
 
 ## 3. `tools/executor.py` — executor de còpies (pas 0 i pas C)
 
-**Entrada**: un pla en CSV (`pla_AAAA-MM-DD.csv`: id, origen (drive_id + ruta), destí (drive_id + ruta), capa, acció `copiar`/`verificar`/`quarantena`, projecte) generat per `cataleg.py --plan` a partir de `projects` + `project_sources`, o escrit a mà per al pas 0.
+**Entrada**: el pla `data/pla_arxiu.json` que genera `tools/espais.py --export-plan` des de l'arxiu virtual (espais d'arxiu i membres amb paper; format i exemple a `docs/arxiu-virtual.md`): espais amb ruta de destí, resum per projecte i les llistes `copiar`, `verificar`, `esborrar`, `quarantena` i `pendents`, cada entrada amb origen (disc + ruta, subcarpetes a excloure), destí final, capa i projecte. (Substitueix el pla en CSV de `cataleg.py --plan` previst inicialment.) Per al pas 0 es pot escriure a mà un JSON amb el mateix format.
 
 **Per línia**: comprovar serial del volum i número de sèrie del destí contra `drives` (com `hash_files.py`); comprovar espai lliure; crear destí; `robocopy` amb els paràmetres del model §9 i registre a `data/logs/`; després, en un procés separat, SHA-256 d'origen i destí **rellegint** (reutilitzar `hash_files.py`), comparació, resultat a `copies` i `events`; en cas de discrepància, reintent del fitxer i error si persisteix. **Mai esborra ni mou l'origen.** `--quarantine` és una acció a part: només sobre línies amb `copies.status=completa` verificada en les últimes 24 h, mou a `_QUARANTENA\AAAA-MM-DD\` amb `quarantena.csv`, i registra l'esdeveniment. Reprén per línia (idempotent: línies amb esdeveniment `ok` es salten). `--dry-run` imprimeix el pla sense fer res.
 

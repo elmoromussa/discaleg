@@ -537,6 +537,14 @@ mentre el CSV siga el punt de partida és: `--export` → corregir el CSV → `-
 `--export` torna a escriure el CSV amb les mateixes columnes més `ruta_virtual` i
 `target_subpath`, amb `gb` i `unics` (% per disc) recalculats des de la DB.
 
+`--export-plan data/pla_arxiu.json` escriu el pla per a `tools/executor.py` (pas 4 de
+`docs/eines-migracio.md`): els espais amb la seua ruta de destí, un resum per projecte i cinc
+llistes de membres segons el paper (`copiar` = canònica, part i tercers; `verificar` = còpies,
+amb les canòniques del mateix projecte contra les quals comprovar-les; `esborrar` = descartar;
+`quarantena`; `pendents` = sense paper), cadascun amb origen, subcarpetes a excloure (membres
+niats d'altres espais), destí final, fitxers, bytes i únics. Es nega si `--check` té errors
+(`--force` ho salta). Format i exemple a `docs/arxiu-virtual.md`.
+
 ### Interfície («Arxiu» al menú; `app/routes/arxiu.py`, `app/arxiu_cache.py`, `app/arxiu_actions.py`, `app/static/arxiu.js`)
 
 Tres pàgines sobre els mateixos càlculs: `/arxiu` (arbre de destí, `?arrel=ID` per a un subarbre,
