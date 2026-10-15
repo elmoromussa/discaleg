@@ -21,6 +21,7 @@
   --axc-disc: 72px;
   --axc-size: 88px;
   --axc-uniq: 56px;
+  --axc-files: 80px;
   --axc-sub: 110px;
   --axc-note: 220px;
   --axc-act: 34px;
@@ -41,6 +42,81 @@ html.dark {
   --ax-warn-bg: #4a3a20;
   --ax-err-bg: #4a2626;
 }
+
+/* Commutadors «detalls» (camps per executar) i «edició» (botons d'acció): classes al body, persistents */
+body:not(.ax-details) .ax-detail { display: none !important; }
+body:not(.ax-details) .ax-members col.ax-detail { width: 0; }
+body:not(.ax-edit) .ax-action { display: none !important; }
+body:not(.ax-edit) .ax-members col.ax-action { width: 0; }
+body:not(.ax-edit) .ax-edit { cursor: default; }
+body:not(.ax-edit) .ax-edit:hover { outline: none; }
+.ax-switches { display: inline-flex; gap: 0.25rem; margin-right: 0.4rem; }
+.ax-switch {
+  font: inherit; font-size: 0.78rem; padding: 0.1rem 0.6rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--card-bg); color: var(--text-muted);
+}
+.ax-switch::before { content: "○ "; font-size: 0.7em; vertical-align: 0.1em; }
+.ax-switch[aria-pressed="true"] { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }
+.ax-switch[aria-pressed="true"]::before { content: "● "; }
+.ax-tab-count { font-weight: 600; background: var(--ax-part); color: #fff; border-radius: 999px; padding: 0 0.4rem; font-size: 0.75rem; margin-left: 0.15rem; }
+html.dark .ax-tab-count { color: #1e1e1e; }
+
+/* Indicador de resolució d'un espai: ✓ (té canònica i cap membre sense paper) o «n pendents» */
+.ax-res { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.72rem; border-radius: 999px; padding: 0 0.45rem; line-height: 1.5; white-space: nowrap; flex-shrink: 0; }
+.ax-res-ok { color: var(--ax-can); border: 1px solid var(--ax-can); padding: 0 0.2rem; }
+.ax-res-ok .icon { width: 11px; height: 11px; }
+.ax-res-pending { color: #fff; background: var(--ax-part); font-weight: 600; }
+html.dark .ax-res-pending { color: #1e1e1e; }
+
+/* Pàgina d'entrada: quatre xifres i dues columnes */
+.ax-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin: 0.25rem 0 1rem; }
+.ax-figure { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.8rem 1rem; background: var(--card-bg); border: 1px solid var(--border); border-left: 4px solid var(--ax-can); border-radius: var(--radius); text-decoration: none; color: var(--text); box-shadow: var(--shadow); }
+.ax-figure:hover { border-color: var(--primary); text-decoration: none; }
+.ax-figure-warn { border-left-color: var(--ax-part); }
+.ax-figure-err { border-left-color: var(--ax-der); }
+.ax-figure-num { font-size: 1.7rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.ax-figure-of { font-size: 0.95rem; font-weight: 500; color: var(--text-muted); }
+.ax-figure-label { font-weight: 600; font-size: 0.92rem; }
+.ax-figure-sub { font-size: 0.78rem; color: var(--text-muted); }
+.ax-inici-cols { display: grid; grid-template-columns: 3fr 2fr; gap: 1.25rem; align-items: start; }
+.ax-inici-block .ax-sumtable { width: 100%; }
+.ax-h2 { font-size: 1.05rem; margin: 0.2rem 0 0.5rem; }
+.ax-h2 .muted { font-weight: 400; font-size: 0.85rem; }
+.ax-discs td, .ax-discs th { padding: 0.25rem 0.6rem; }
+.ax-discs .ax-cov-barhead { width: 30%; }
+.ax-discs tr.ax-disc-warn td:first-child { border-left: 3px solid var(--ax-part); }
+
+/* Pendents: xips que filtren els grups, grups plegables, accions directes */
+.ax-pend-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; margin-bottom: 0.9rem; }
+.ax-pend-chip { cursor: pointer; background: var(--card-bg); color: var(--text); font: inherit; font-size: 0.8rem; }
+.ax-pend-chip b { font-weight: 600; }
+.ax-pend-chip-error b { color: var(--ax-der); }
+.ax-pend-chip-avis b { color: var(--ax-part); }
+.ax-pend-chip[aria-pressed="true"] { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }
+.ax-pend-chips.ax-pend-filtered .ax-pend-chip:not([aria-pressed="true"]) { opacity: 0.55; }
+.ax-pend-total { margin-left: auto; font-size: 0.82rem; }
+.ax-pend-group { margin-bottom: 1rem; }
+.ax-pend-group[hidden] { display: none; }
+.ax-pend-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.ax-pend-toggle { font: inherit; font-weight: 600; background: none; border: 0; padding: 0; cursor: pointer; color: var(--text); display: inline-flex; align-items: center; gap: 0.35rem; }
+.ax-pend-toggle .ax-chevron { width: 12px; height: 12px; transition: transform 0.15s ease; color: var(--text-muted); }
+.ax-pend-toggle[aria-expanded="true"] .ax-chevron { transform: rotate(90deg); }
+.ax-pend-hint { font-weight: 400; font-size: 0.82rem; }
+.ax-pend-group[data-collapsed] .ax-pend-body { display: none; }
+.ax-pend-empty { margin: 0.2rem 0 0 1.4rem; font-size: 0.85rem; }
+.ax-findings td { vertical-align: top; }
+.ax-findings .ax-f-detail { max-width: 0; width: 46%; }
+.ax-findings .ax-f-detail .ax-pathline { display: flex; gap: 0.4rem; align-items: center; min-width: 0; }
+.ax-findings .ax-f-drive { flex-shrink: 0; }
+.ax-findings .ax-f-msg { display: block; font-size: 0.9em; white-space: normal; overflow-wrap: anywhere; }
+.ax-findings .ax-f-space { max-width: 0; width: 22%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ax-findings .col-links { white-space: nowrap; }
+.ax-findings .col-links .btn-sm { padding: 0.1rem 0.5rem; font-size: 0.78rem; }
+.ax-findings .ax-f-kind { font-size: 0.78rem; white-space: nowrap; }
+.ax-findings tr.ax-f-more td { font-size: 0.85rem; }
+.ax-btn-danger { color: var(--ax-der); }
+.ax-btn-danger:hover { border-color: var(--ax-der); }
+.ax-pend-row.ax-editing .col-links { white-space: normal; }
 
 /* Pàgines a tot l'ample amb marge */
 body.page-wide .container { max-width: none; padding-left: 1.5rem; padding-right: 1.5rem; }
@@ -271,6 +347,7 @@ html.dark .ax-role { color: #1e1e1e; }
 .ax-members col.c-disc { width: var(--axc-disc); }
 .ax-members col.c-size { width: var(--axc-size); }
 .ax-members col.c-uniq { width: var(--axc-uniq); }
+.ax-members col.c-files { width: var(--axc-files); }
 .ax-members col.c-sub { width: var(--axc-sub); }
 .ax-members col.c-note { width: var(--axc-note); }
 .ax-members col.c-act { width: var(--axc-act); }
@@ -414,6 +491,7 @@ html.dark .ax-role { color: #1e1e1e; }
 .ax-addbar .form-hint { margin: 0; flex-basis: 100%; }
 
 @media (max-width: 900px) {
+  .ax-inici-cols { grid-template-columns: 1fr; }
   .ax-meta .ax-roles { display: none; }
   .ax-actionsbar .ax-last { display: none; }
   .ax-members { margin-left: 0; width: 100%; min-width: 0; }

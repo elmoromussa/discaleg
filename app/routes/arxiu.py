@@ -61,14 +61,24 @@ def _common(request: Request, view: str, conn: sqlite3.Connection | None = None,
     return ctx
 
 
-def _decorate(node: dict[str, Any], depth_offset: int = 0) -> None:
+def _decorate(node: dict[str, Any], depth_offset: int = 0) -> int:
+    """Afegeix a cada node el que la plantilla necessita i torna els projectes sense canònica
+    del subarbre. `pending` = projectes sense canònica + membres sense paper (recursius)."""
     node["rel_depth"] = node["depth"] - depth_offset
     for m in node["members"]:
         m["api_path"] = _api_path(m["relative_path"])
         m["role_key"] = m["role"] or ROLE_NONE
         m["path_parts"] = split_path(m["relative_path"])
+    missing = 0
+    if node["archive_kind"] == "projecte" and "canonica" not in node["totals"]["by_role"]:
+        missing = 1
     for c in node["children"]:
-        _decorate(c, depth_offset)
+        missing += _decorate(c, depth_offset)
+    no_role = node["totals"]["by_role"].get(ROLE_NONE, {}).get("members", 0)
+    node["missing_canonica"] = missing
+    node["no_role"] = no_role
+    node["pending"] = missing + no_role
+    return missing
 
 
 def arbre_page(request: Request, templates, conn: sqlite3.Connection, force: bool = False,
@@ -142,12 +152,7 @@ def cobertura_page(request: Request, templates, conn: sqlite3.Connection, disc: 
             except SpaceError:
                 level = queries_cobertura.folder_coverage(calc, disc, "", arxiu_cache.stamps())
         else:
-            for d in drives:
-                c = calc.coverage(d)
-                o = {k: c[k] for k in ("drive_id", "drive_files", "drive_bytes", "covered_files",
-                                       "covered_bytes", "uncovered_files", "uncovered_bytes", "covered")}
-                o["pct"] = 100.0 * o["covered_bytes"] / o["drive_bytes"] if o["drive_bytes"] else 0.0
-                overview.append(o)
+            overview = _drives_coverage(calc, conn)
         ctx = _common(request, "cobertura", conn, calc)
     if level is not None:
         _decorate_cov_rows(level["rows"], len(level["crumbs"]) + 1)
@@ -173,24 +178,97 @@ def cobertura_files(request: Request, templates, disc: str, carpeta: str, nivell
     return templates.TemplateResponse(request, "arxiu_cobertura_files.html", ctx)
 
 
-def comprovacions_page(request: Request, templates, conn: sqlite3.Connection):
-    t0 = time.time()
-    with arxiu_cache.locked() as calc:
-        findings = calc.check()
-        paths = {sid: s["virtual_path"] for sid, s in calc.spaces.items()}
-        ctx = _common(request, "comprovacions", conn, calc)
+COVERED_PCT = 90.0   # un disc compta com a cobert amb aquest % de bytes dins d'espais
+OUTSIDE_MIN = 1_000_000_000   # carpetes fora d'espai que valen la pena llistar a «Pendents»
+OUTSIDE_PER_DRIVE = 8
+
+
+def _drives_coverage(calc: ArxiuCalc, conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Resum de cobertura per disc (sense detalls), amb % cobert i les carpetes de nivell 1 fora."""
+    out = []
+    for d in [r[0] for r in conn.execute("SELECT drive_id FROM drives ORDER BY drive_id")]:
+        c = calc.coverage(d)
+        o = {k: c[k] for k in ("drive_id", "drive_files", "drive_bytes", "covered_files",
+                               "covered_bytes", "uncovered_files", "uncovered_bytes", "covered")}
+        o["pct"] = 100.0 * o["covered_bytes"] / o["drive_bytes"] if o["drive_bytes"] else 0.0
+        o["is_covered"] = o["pct"] >= COVERED_PCT
+        o["outside"] = [{"level1": g["level1"], "api_path": _api_path(g["level1"]), "files": g["files"], "bytes": g["bytes"]}
+                        for g in c["groups"] if g["bytes"] >= OUTSIDE_MIN and g["level1"]]
+        o["outside_more"] = max(0, len(o["outside"]) - OUTSIDE_PER_DRIVE)
+        o["outside"] = o["outside"][:OUTSIDE_PER_DRIVE]
+        out.append(o)
+    return out
+
+
+def _pending_groups(calc: ArxiuCalc, drives: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Els pendents ordenats per feina: errors, projectes sense canònica, membres sense paper,
+    carpetes fora d'espai per disc, altres avisos i, al final, els niaments entre espais."""
+    findings = calc.check()
+    paths = {sid: s["virtual_path"] for sid, s in calc.spaces.items()}
     for f in findings:
         f["space_path"] = paths.get(f.get("space_id"), f.get("space_path", ""))
         f["other_space_path"] = paths.get(f.get("other_space_id"), "")
         if f.get("path") is not None:
             f["api_path"] = _api_path(f["path"])
-    n_err = sum(1 for f in findings if f["severity"] == "error")
-    by_kind: dict[str, int] = {}
-    for f in findings:
-        by_kind[f["kind"]] = by_kind.get(f["kind"], 0) + 1
-    ctx.update({"findings": findings, "n_err": n_err, "n_avis": len(findings) - n_err,
-                "by_kind": by_kind, "elapsed": time.time() - t0})
-    return templates.TemplateResponse(request, "arxiu_comprovacions.html", ctx)
+            f["path_parts"] = split_path(f["path"])
+    groups = [
+        {"key": "errors", "title": "Errors", "hint": "Noms, jerarquia i papers contradictoris: l'executor es nega a escriure el pla mentre n'hi haja.",
+         "severity": "error", "rows": [f for f in findings if f["severity"] == "error"]},
+        {"key": "sense-canonica", "title": "Projectes sense canònica", "hint": "Cap membre del projecte té el paper canònica: tria quina còpia es copia a l'arxiu.",
+         "severity": "avis", "rows": [f for f in findings if f["kind"] == "sense-canonica"]},
+        {"key": "sense-paper", "title": "Membres sense paper", "hint": "Carpetes dins d'un espai sense decidir què són: canvia el paper o treu-les.",
+         "severity": "avis", "rows": [f for f in findings if f["kind"] == "sense-paper"]},
+        {"key": "fora", "title": "Carpetes fora de tot espai", "hint": f"Per disc, les carpetes de nivell 1 de més d'1 GB que no són en cap espai (fins a {OUTSIDE_PER_DRIVE} per disc).",
+         "severity": "avis", "drives": [d for d in drives if d["outside"]],
+         "rows": [dict(drive_id=d["drive_id"], **o) for d in drives for o in d["outside"]]},
+        {"key": "altres", "title": "Altres avisos", "hint": "Orígens repetits en dos espais i orígens que ja no són a l'inventari.",
+         "severity": "avis", "rows": [f for f in findings if f["severity"] != "error"
+                                       and f["kind"] not in ("sense-canonica", "sense-paper", "niat-entre-espais")]},
+        {"key": "niats", "title": "Niaments entre espais", "hint": "Carpetes membres dins d'una carpeta membre d'un altre espai: quasi tots són volguts (cada fitxer compta per al membre més profund).",
+         "severity": "info", "collapsed": True, "rows": [f for f in findings if f["kind"] == "niat-entre-espais"]},
+    ]
+    for g in groups:
+        g["n"] = len(g["rows"])
+    return groups
+
+
+def _n_pending(groups: list[dict[str, Any]]) -> int:
+    return sum(g["n"] for g in groups if g["key"] in ("errors", "sense-canonica", "sense-paper"))
+
+
+def pendents_page(request: Request, templates, conn: sqlite3.Connection):
+    t0 = time.time()
+    with arxiu_cache.locked() as calc:
+        drives = _drives_coverage(calc, conn)
+        groups = _pending_groups(calc, drives)
+        ctx = _common(request, "pendents", conn, calc)
+    ctx.update({"groups": groups, "n_err": groups[0]["n"], "n_pending": _n_pending(groups),
+                "n_all": sum(g["n"] for g in groups), "elapsed": time.time() - t0})
+    return templates.TemplateResponse(request, "arxiu_pendents.html", ctx)
+
+
+def inici_page(request: Request, templates, conn: sqlite3.Connection, force: bool = False):
+    """Pàgina d'entrada de l'Arxiu: quatre xifres i la llista de discs amb el % cobert."""
+    t0 = time.time()
+    with arxiu_cache.locked(force) as calc:
+        roots = [calc.space_totals(r) for r in calc.roots]
+        root_names = [(calc.spaces[r]["target_name"], calc.spaces[r]["archive_kind"]) for r in calc.roots]
+        drives = _drives_coverage(calc, conn)
+        groups = _pending_groups(calc, drives)
+        n_spaces, n_members = len(calc.spaces), len(calc.members)
+        ctx = _common(request, "inici", conn, calc)
+    fons = [{"name": n, "kind": k, "totals": t} for (n, k), t in zip(root_names, roots)]
+    ctx.update({
+        "fons": fons,
+        "total_bytes": sum(t["bytes"] for t in roots), "total_files": sum(t["files"] for t in roots),
+        "unique_bytes": sum(t["unique_bytes"] for t in roots),
+        "drives": drives, "n_drives_covered": sum(1 for d in drives if d["is_covered"]),
+        "covered_pct": COVERED_PCT,
+        "n_pending": _n_pending(groups), "n_err": groups[0]["n"],
+        "n_spaces": n_spaces, "n_members": n_members,
+        "elapsed": time.time() - t0, "cache": arxiu_cache.info(),
+    })
+    return templates.TemplateResponse(request, "arxiu_inici.html", ctx)
 
 
 # ---------------------------------------------------------------------------

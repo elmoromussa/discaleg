@@ -123,7 +123,18 @@ def copies_route(request: Request, conn: sqlite3.Connection = Depends(get_db)):
 
 
 @app.get("/arxiu", name="arxiu_route")
-def arxiu_route(request: Request, refresca: int = 0, arrel: int = 0, conn: sqlite3.Connection = Depends(get_db)):
+def arxiu_route(request: Request, refresca: int = 0, arrel: int = 0, espai: int = 0,
+                conn: sqlite3.Connection = Depends(get_db)):
+    """Arxiu virtual: pàgina d'entrada (xifres i discs). Els enllaços antics amb `arrel` o `espai` van a l'arbre."""
+    if arrel or espai:
+        q = f"?arrel={arrel}" if arrel else f"?espai={espai}"
+        return RedirectResponse(url=str(request.url_for("arxiu_arbre_route")) + q, status_code=302)
+    from app.routes import arxiu
+    return arxiu.inici_page(request, templates, conn, force=bool(refresca))
+
+
+@app.get("/arxiu/arbre", name="arxiu_arbre_route")
+def arxiu_arbre_route(request: Request, refresca: int = 0, arrel: int = 0, conn: sqlite3.Connection = Depends(get_db)):
     """Arxiu virtual: arbre de destí amb totals per paper i únics (`arrel` = només un subarbre)."""
     from app.routes import arxiu
     return arxiu.arbre_page(request, templates, conn, force=bool(refresca), root=arrel or None)
@@ -145,11 +156,17 @@ def arxiu_cobertura_files_route(request: Request, disc: str = "", carpeta: str =
     return arxiu.cobertura_files(request, templates, disc.strip(), carpeta, nivell)
 
 
-@app.get("/arxiu/comprovacions", name="arxiu_comprovacions_route")
-def arxiu_comprovacions_route(request: Request, conn: sqlite3.Connection = Depends(get_db)):
-    """Conflictes de l'arxiu virtual."""
+@app.get("/arxiu/pendents", name="arxiu_pendents_route")
+def arxiu_pendents_route(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Pendents de l'arxiu virtual, ordenats per feina (projectes sense canònica, membres sense paper, fora d'espai…)."""
     from app.routes import arxiu
-    return arxiu.comprovacions_page(request, templates, conn)
+    return arxiu.pendents_page(request, templates, conn)
+
+
+@app.get("/arxiu/comprovacions", name="arxiu_comprovacions_route")
+def arxiu_comprovacions_route(request: Request):
+    """Nom antic de la pàgina de pendents."""
+    return RedirectResponse(url=str(request.url_for("arxiu_pendents_route")), status_code=301)
 
 
 @app.get("/api/arxiu/tree")

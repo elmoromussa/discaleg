@@ -9,7 +9,10 @@
  * - Cobertura: nivell a nivell (camí de molles) amb desplegament en línia (el servidor serveix
  *   les files del nivell següent), llindar «amaga < 1 GB» persistent, ordenació, selecció
  *   múltiple a qualsevol profunditat i «Afegeix a l'arxiu» (espai, paper, destí, nota).
- * - Totes les pàgines: «Desfés» (darrera acció) i registre d'accions.
+ * - Pendents: xips que filtren els grups (persistents), grups plegables, «canvia el paper» i
+ *   «treu de l'espai» directes.
+ * - Totes les pàgines: commutadors «detalls» (camps per executar) i «edició» (botons d'acció),
+ *   persistents a localStorage; «Desfés» (darrera acció) i registre d'accions.
  *
  * Cada acció crida l'API JSON (/api/arxiu/…) i recarrega la pàgina (el servidor té la memòria
  * cau: la recàrrega és ràpida), conservant la posició de scroll. JavaScript pur, sense dependències.
@@ -220,6 +223,24 @@
     });
   }
 
+  // ----------------------------------------------------------------- commutadors «detalls» i «edició»
+  var UI_KEY = 'arxiu.ui.v1';
+  var ui = loadStored(UI_KEY, {});
+  function isEdit() { return document.body.classList.contains('ax-edit'); }
+  [['ax-sw-details', 'details', 'ax-details'], ['ax-sw-edit', 'edit', 'ax-edit']].forEach(function (p) {
+    var b = document.getElementById(p[0]);
+    if (!b) return;
+    b.setAttribute('aria-pressed', ui[p[1]] ? 'true' : 'false');
+    document.body.classList.toggle(p[2], !!ui[p[1]]);
+    b.addEventListener('click', function () {
+      ui[p[1]] = !ui[p[1]];
+      store(UI_KEY, ui);
+      b.setAttribute('aria-pressed', ui[p[1]] ? 'true' : 'false');
+      document.body.classList.toggle(p[2], !!ui[p[1]]);
+      closeMenu();
+    });
+  });
+
   // ----------------------------------------------------------------- desfés i registre
   var undoBtn = document.getElementById('ax-undo');
   if (undoBtn) {
@@ -249,8 +270,8 @@
 
   // ----------------------------------------------------------------- amplades de columna compartides
   var COLS_KEY = 'arxiu.cols.v1';
-  var COL_DEF = { role: 56, disc: 72, size: 88, uniq: 56, sub: 110, note: 220, act: 34 };
-  var COL_MIN = { role: 40, disc: 52, size: 70, uniq: 48, sub: 60, note: 80, act: 34 };
+  var COL_DEF = { role: 56, disc: 72, size: 88, uniq: 56, files: 80, sub: 110, note: 220, act: 34 };
+  var COL_MIN = { role: 40, disc: 52, size: 70, uniq: 48, files: 56, sub: 60, note: 80, act: 34 };
   var COL_MAX = 900;
   function initColumns(root) {
     var cols = loadStored(COLS_KEY, {});
@@ -357,7 +378,7 @@
         return;
       }
       var editCell = ev.target.closest('.ax-edit');
-      if (editCell && !editCell.classList.contains('ax-editing')) { startEdit(editCell); return; }
+      if (editCell && !editCell.classList.contains('ax-editing')) { if (isEdit()) startEdit(editCell); return; }
       var btn = ev.target.closest('.ax-toggle');
       if (btn) {
         var li = btn.closest('.ax-node');
@@ -374,7 +395,7 @@
     });
     tree.addEventListener('dblclick', function (ev) {
       var noteCell = ev.target.closest('.ax-note');
-      if (noteCell && !noteCell.classList.contains('ax-editing')) {
+      if (noteCell && !noteCell.classList.contains('ax-editing') && isEdit()) {
         ev.preventDefault();
         noteCell.classList.remove('ax-note-open');
         startEdit(noteCell);
@@ -656,6 +677,68 @@
         act('POST', '/spaces', { parent_id: parseInt(parentId, 10), archive_kind: sel.value, target_name: name.value.trim() });
       });
     }
+  }
+
+  // ----------------------------------------------------------------- pendents
+  var pendChips = document.getElementById('ax-pend-chips');
+  if (pendChips) initPendents();
+
+  function initPendents() {
+    var PEND_KEY = 'arxiu.pend.v1';
+    var prefs = loadStored(PEND_KEY, {});
+    if (!prefs.groups) prefs.groups = [];
+    if (!prefs.open) prefs.open = {};
+    var groups = Array.prototype.slice.call(document.querySelectorAll('.ax-pend-group'));
+    function applyGroups() {
+      var on = prefs.groups;
+      pendChips.classList.toggle('ax-pend-filtered', on.length > 0);
+      pendChips.querySelectorAll('.ax-pend-chip').forEach(function (c) { c.setAttribute('aria-pressed', on.indexOf(c.dataset.group) >= 0 ? 'true' : 'false'); });
+      groups.forEach(function (g) {
+        g.hidden = on.length > 0 && on.indexOf(g.dataset.group) < 0;
+        var collapsed = prefs.open[g.dataset.group] == null ? g.hasAttribute('data-collapsed') : !prefs.open[g.dataset.group];
+        if (on.length === 1 && on[0] === g.dataset.group) collapsed = false;
+        g.toggleAttribute('data-collapsed', collapsed);
+        g.querySelector('.ax-pend-toggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      });
+    }
+    pendChips.addEventListener('click', function (ev) {
+      var c = ev.target.closest('.ax-pend-chip');
+      if (!c) return;
+      var k = c.dataset.group, i = prefs.groups.indexOf(k);
+      if (i >= 0) prefs.groups.splice(i, 1); else prefs.groups.push(k);
+      store(PEND_KEY, prefs);
+      applyGroups();
+    });
+    groups.forEach(function (g) {
+      g.querySelector('.ax-pend-toggle').addEventListener('click', function () {
+        prefs.open[g.dataset.group] = g.hasAttribute('data-collapsed');
+        store(PEND_KEY, prefs);
+        applyGroups();
+      });
+    });
+    applyGroups();
+    document.addEventListener('click', function (ev) {
+      var b = ev.target.closest('.ax-pend-act');
+      if (!b) return;
+      var tr = b.closest('.ax-pend-row');
+      var spaceId = tr.dataset.space, itemId = tr.dataset.item;
+      if (b.dataset.act === 'remove') {
+        act('DELETE', '/members/' + spaceId + '/' + itemId);
+      } else if (b.dataset.act === 'role') {
+        if (tr.classList.contains('ax-editing')) return;
+        tr.classList.add('ax-editing');
+        var sel = el('select', 'ax-inline-ctrl');
+        var o0 = el('option', '', 'tria el paper…'); o0.value = ''; sel.appendChild(o0);
+        cfg.roles.forEach(function (r) { var o = el('option', '', (cfg.roleShort[r] || r) + ' · ' + r); o.value = r; sel.appendChild(o); });
+        var wrap = el('span', 'ax-inline');
+        wrap.appendChild(sel);
+        b.parentElement.appendChild(wrap);
+        sel.focus();
+        sel.addEventListener('change', function () { if (sel.value) act('PATCH', '/members/' + spaceId + '/' + itemId, { role: sel.value }); });
+        sel.addEventListener('keydown', function (ev2) { if (ev2.key === 'Escape') { wrap.remove(); tr.classList.remove('ax-editing'); } });
+        sel.addEventListener('blur', function () { setTimeout(function () { wrap.remove(); tr.classList.remove('ax-editing'); }, 150); });
+      }
+    });
   }
 
   // ----------------------------------------------------------------- cobertura navegable

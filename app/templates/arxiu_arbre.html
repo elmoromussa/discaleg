@@ -9,6 +9,14 @@
   {%- endfor -%}
 {%- endmacro %}
 
+{% macro resolution(n) -%}
+  {%- if n.pending -%}
+    <span class="ax-res ax-res-pending" title="{% if n.missing_canonica %}{{ n.missing_canonica }} projecte{% if n.missing_canonica != 1 %}s{% endif %} sense canònica{% endif %}{% if n.missing_canonica and n.no_role %} · {% endif %}{% if n.no_role %}{{ n.no_role }} membre{% if n.no_role != 1 %}s{% endif %} sense paper{% endif %}">{{ n.pending }} pendent{% if n.pending != 1 %}s{% endif %}</span>
+  {%- else -%}
+    <span class="ax-res ax-res-ok" title="Resolt: {% if n.archive_kind == 'projecte' %}té canònica i {% endif %}cap membre sense paper"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
+  {%- endif -%}
+{%- endmacro %}
+
 {% macro path_trunc(m, url) -%}
 <a class="ax-ptrunc" href="{{ url }}" title="{{ m.drive_id }}\{{ m.relative_path }} — obre a l'explorador"><span class="ax-ph">{{ m.path_parts.head }}</span><span class="ax-pm">{{ m.path_parts.mid }}</span><span class="ax-pt">{{ m.path_parts.tail }}</span></a>
 {%- endmacro %}
@@ -18,44 +26,47 @@
   <div class="ax-row">
     <button type="button" class="ax-toggle{% if not n.children and not n.members %} ax-toggle-leaf{% endif %}" aria-label="Plega o desplega" tabindex="-1"><svg class="icon ax-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></button>
     <span class="ax-kind" title="{{ kind_label[n.archive_kind] }}">{{ kind_label[n.archive_kind] }}</span>
-    <a class="ax-name" href="{{ request.url_for('arxiu_route') }}?arrel={{ n.space_id }}" title="{{ n.virtual_path }} — mostra només aquest subarbre">{{ n.target_name or n.name }}</a>
+    <a class="ax-name" href="{{ request.url_for('arxiu_arbre_route') }}?arrel={{ n.space_id }}" title="{{ n.virtual_path }} — mostra només aquest subarbre">{{ n.target_name or n.name }}</a>
+    {{ resolution(n) }}
     {% if n.state %}<span class="ax-state ax-state-{{ n.state }}">{{ n.state }}</span>{% endif %}
     {% if n.canonical_drive_id %}<span class="ax-disc" title="Disc de destí">→ {{ n.canonical_drive_id }}</span>{% endif %}
     <span class="ax-meta">
       <span class="ax-bytes" title="{{ '{:,}'.format(n.totals.files).replace(',', '.') }} fitxers">{{ n.totals.bytes | format_bytes }}</span>
       <span class="ax-unique" title="Únics: bytes dels membres canònica/part sense cap còpia fora d'aquest espai">únics {{ n.totals.unique_bytes | format_bytes }}</span>
-      <span class="ax-roles">{{ role_badges(n.totals.by_role) }}</span>
+      <span class="ax-roles ax-detail">{{ role_badges(n.totals.by_role) }}</span>
     </span>
-    <button type="button" class="ax-more ax-more-node" aria-haspopup="menu" aria-expanded="false" title="Accions de l'espai" aria-label="Accions de l'espai {{ n.target_name or n.name }}"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button>
+    <button type="button" class="ax-more ax-more-node ax-action" aria-haspopup="menu" aria-expanded="false" title="Accions de l'espai" aria-label="Accions de l'espai {{ n.target_name or n.name }}"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button>
   </div>
   <div class="ax-children">
     {% if n.members %}
     <table class="ax-members">
-      <colgroup><col class="c-role"><col class="c-disc"><col class="c-path"><col class="c-size"><col class="c-uniq"><col class="c-sub"><col class="c-note"><col class="c-act"></colgroup>
+      <colgroup><col class="c-role"><col class="c-disc"><col class="c-path"><col class="c-size"><col class="c-uniq"><col class="c-files ax-detail"><col class="c-sub ax-detail"><col class="c-note ax-detail"><col class="c-act ax-action"></colgroup>
       <thead><tr>
         <th class="col-role">Paper<span class="ax-rz" data-col="role" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
         <th class="col-disc">Disc<span class="ax-rz" data-col="disc" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
         <th class="col-path">Carpeta d'origen</th>
         <th class="num">Mida<span class="ax-rz" data-col="size" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
         <th class="num" title="% de bytes sense còpia en cap altre disc (criteri del catàleg)">Únics<span class="ax-rz" data-col="uniq" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
-        <th>Destí<span class="ax-rz" data-col="sub" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
-        <th>Nota<span class="ax-rz" data-col="note" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
-        <th class="col-act"></th>
+        <th class="num ax-detail">Fitxers<span class="ax-rz" data-col="files" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
+        <th class="ax-detail">Destí<span class="ax-rz" data-col="sub" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
+        <th class="ax-detail">Nota<span class="ax-rz" data-col="note" title="Arrossega per canviar l'amplada; doble clic per restaurar-la"></span></th>
+        <th class="col-act ax-action"></th>
       </tr></thead>
       <tbody>
         {% for m in n.members %}
         <tr class="ax-member" data-space="{{ n.space_id }}" data-item="{{ m.item_id }}" data-drive="{{ m.drive_id }}" data-apipath="{{ m.api_path }}" data-label="{{ m.drive_id }}\{{ m.relative_path }}" data-role="{{ m.role_key }}" data-sub="{{ m.target_subpath or '' }}" data-note="{{ m.note or '' }}" data-text="{{ (m.drive_id ~ ' ' ~ m.relative_path ~ ' ' ~ (m.note or '')) | lower }}">
-          <td class="col-role ax-edit" data-field="role" title="Clic per canviar el paper"><span class="ax-role ax-role-{{ m.role_key }}" title="{{ role_label[m.role_key] }}">{{ role_short[m.role_key] }}</span></td>
+          <td class="col-role ax-edit" data-field="role" title="Paper: {{ role_label[m.role_key] }} (amb «edició», clic per canviar-lo)"><span class="ax-role ax-role-{{ m.role_key }}">{{ role_short[m.role_key] }}</span></td>
           <td class="col-disc"><a href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ m.drive_id | urlencode }}" title="Cobertura del disc {{ m.drive_id }}">{{ m.drive_id }}</a></td>
           <td class="ax-path">
             <div class="ax-pathline">{{ path_trunc(m, request.url_for('explorador_route') ~ '?drive=' ~ (m.drive_id | urlencode) ~ '&path=' ~ (m.api_path | urlencode)) }}{% if m.kind == 'file' %}<span class="ax-badge" title="fitxer">(fitxer)</span>{% endif %}{% if m.nested_in %}<span class="ax-nested" title="Dins d'una altra carpeta membre: només compten els fitxers que no són d'un membre més profund">niat</span>{% endif %}</div>
-            <span class="ax-virtual" title="Ruta de destí: {{ m.virtual_path }}">→ {{ m.virtual_path }}</span>
+            <span class="ax-virtual ax-detail" title="Ruta de destí: {{ m.virtual_path }}">→ {{ m.virtual_path }}</span>
           </td>
           <td class="num bytes" title="{{ '{:,}'.format(m.files).replace(',', '.') }} fitxers">{{ m.bytes | format_bytes }}</td>
           <td class="num">{{ '%.0f' | format(m.unique_pct) }} %</td>
-          <td class="ax-sub ax-edit" data-field="target_subpath" title="{% if m.target_subpath %}{{ m.target_subpath }} — {% endif %}Clic per canviar el destí dins de l'espai («.» = contingut a l'arrel)">{% if m.target_subpath == '.' %}<span class="muted">(arrel)</span>{% else %}{{ m.target_subpath or '' }}{% endif %}</td>
-          <td class="ax-note" data-field="note" title="{% if m.note %}{{ m.note }} — clic per veure-la sencera, doble clic per editar-la{% else %}Doble clic per afegir una nota{% endif %}">{{ m.note or '' }}</td>
-          <td class="col-act"><button type="button" class="ax-more" aria-haspopup="menu" aria-expanded="false" title="Accions del membre" aria-label="Accions de {{ m.relative_path }}"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td>
+          <td class="num muted ax-detail">{{ '{:,}'.format(m.files).replace(',', '.') }}</td>
+          <td class="ax-sub ax-edit ax-detail" data-field="target_subpath" title="{% if m.target_subpath %}{{ m.target_subpath }} — {% endif %}destí dins de l'espai («.» = contingut a l'arrel); amb «edició», clic per canviar-lo">{% if m.target_subpath == '.' %}<span class="muted">(arrel)</span>{% else %}{{ m.target_subpath or '' }}{% endif %}</td>
+          <td class="ax-note ax-detail" data-field="note" title="{% if m.note %}{{ m.note }} — clic per veure-la sencera; amb «edició», doble clic per editar-la{% else %}Amb «edició», doble clic per afegir una nota{% endif %}">{{ m.note or '' }}</td>
+          <td class="col-act ax-action"><button type="button" class="ax-more" aria-haspopup="menu" aria-expanded="false" title="Accions del membre" aria-label="Accions de {{ m.relative_path }}"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -70,13 +81,13 @@
 </li>
 {% endmacro %}
 
-<h1>Arxiu <span class="h1-sub">arxiu virtual: l'arxiu de destí muntat dins de la base de dades</span></h1>
+<h1>Arxiu <span class="h1-sub">arbre de destí: fons › sèrie › projecte › capa, amb els membres d'origen de cada espai</span></h1>
 {% include "arxiu_tabs.html" %}
 
 {% if crumbs %}
 <nav class="breadcrumbs ax-crumbs" aria-label="Camí de l'espai">
-  <a href="{{ request.url_for('arxiu_route') }}">Tot l'arxiu</a>
-  {% for c in crumbs %}<span class="breadcrumbs-sep" aria-hidden="true">›</span>{% if loop.last %}<span aria-current="page">{{ c.name }}</span>{% else %}<a href="{{ request.url_for('arxiu_route') }}?arrel={{ c.space_id }}">{{ c.name }}</a>{% endif %}{% endfor %}
+  <a href="{{ request.url_for('arxiu_arbre_route') }}">Tot l'arxiu</a>
+  {% for c in crumbs %}<span class="breadcrumbs-sep" aria-hidden="true">›</span>{% if loop.last %}<span aria-current="page">{{ c.name }}</span>{% else %}<a href="{{ request.url_for('arxiu_arbre_route') }}?arrel={{ c.space_id }}">{{ c.name }}</a>{% endif %}{% endfor %}
 </nav>
 {% endif %}
 
@@ -86,11 +97,11 @@
     {% for n in tree %}
     <tr class="ax-kind-{{ n.archive_kind }}">
       <td><span class="ax-kind">{{ kind_label[n.archive_kind] }}</span></td>
-      <td><strong>{{ n.target_name }}</strong></td>
+      <td><strong>{{ n.target_name }}</strong> {{ resolution(n) }}</td>
       <td class="num"><strong>{{ n.totals.bytes | format_bytes }}</strong></td>
-      <td class="num muted">{{ '{:,}'.format(n.totals.files).replace(',', '.') }} fitxers</td>
+      <td class="num muted ax-detail">{{ '{:,}'.format(n.totals.files).replace(',', '.') }} fitxers</td>
       <td class="num">únics <strong>{{ n.totals.unique_bytes | format_bytes }}</strong></td>
-      <td class="ax-sum-roles">{{ role_badges(n.totals.by_role) }}</td>
+      <td class="ax-sum-roles ax-detail">{{ role_badges(n.totals.by_role) }}</td>
     </tr>
     {% endfor %}
     </tbody>
@@ -98,7 +109,7 @@
   <div class="ax-sum-info">
     <span>{{ n_spaces }} espais d'arxiu · {{ n_members }} membres</span>
     <span class="muted">· calculat en {{ '%.1f' | format(elapsed) }} s{% if cache.built_utc %} · memòria cau de les {{ cache.built_utc[11:16] }}{% endif %}</span>
-    <a href="{{ request.url_for('arxiu_route') }}?refresca=1" class="btn btn-sm" title="Torna a calcular-ho tot (uns 20 s)">Recalcula</a>
+    <a href="{{ request.url_for('arxiu_arbre_route') }}?refresca=1" class="btn btn-sm" title="Torna a calcular-ho tot (uns 20 s)">Recalcula</a>
   </div>
 </section>
 

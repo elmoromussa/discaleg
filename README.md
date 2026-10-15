@@ -79,7 +79,7 @@ L’aplicació pot arrencar **sense cap fitxer de base de dades**. En aquest cas
 | `/extensions` | Llistat d'estadístiques per extensió (paginat) |
 | `/folders` | Llistat de carpetes per mida (paginat) |
 | `/explorador` | Explorador simulat d'arxius i carpetes des de la DB (arbre + contingut, totals per carpeta, ruta copiable; `?drive=&path=` obre una carpeta directament) |
-| `/arxiu`, `/arxiu/cobertura`, `/arxiu/comprovacions` | Arxiu virtual: arbre de destí (fons › sèrie › projecte › capa) amb totals per paper i únics, edició en línia i desfer; cobertura de cada disc (què no és en cap espai, amb afegir en bloc); conflictes. Vegeu `docs/migracio.md` |
+| `/arxiu`, `/arxiu/arbre`, `/arxiu/cobertura`, `/arxiu/pendents` | Arxiu virtual: pàgina d'entrada (xifres i discs), arbre de destí (fons › sèrie › projecte › capa) amb totals per paper i únics, edició en línia i desfer; cobertura navegable de cada disc carpeta a carpeta (dins i fora de l'arxiu, amb afegir en bloc); pendents ordenats per feina. Vegeu `docs/migracio.md` |
 | `/discs` | Gestió de discs: escanejar i incorporar o actualitzar un disc (en segon pla, amb progrés) |
 | `/api/scan/status` | Estat JSON de l'escaneig en segon pla |
 | `/health` | Comprova si la DB existeix (retorn JSON) |

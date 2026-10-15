@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Arxiu · pendents — Discàleg{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ static_url(request, 'arxiu.css') }}">{% endblock %}
+{% block body_class %}page-wide{% endblock %}
+{% block content %}
+{% macro path_trunc(f, url) -%}
+<a class="ax-ptrunc" href="{{ url }}" title="{{ f.drive_id }}\{{ f.path }} — obre a l'explorador"><span class="ax-ph">{{ f.path_parts.head }}</span><span class="ax-pm">{{ f.path_parts.mid }}</span><span class="ax-pt">{{ f.path_parts.tail }}</span></a>
+{%- endmacro %}
+<h1>Arxiu <span class="h1-sub">pendents: el que queda per decidir, ordenat per feina</span></h1>
+{% include "arxiu_tabs.html" %}
+
+<div class="ax-chips ax-pend-chips" id="ax-pend-chips" role="group" aria-label="Filtra per tipus de pendent">
+  {% for g in groups %}<button type="button" class="ax-chip-static ax-pend-chip ax-pend-chip-{{ g.severity }}" data-group="{{ g.key }}" aria-pressed="false" title="{{ g.hint }}">{{ g.title }} <b>{{ g.n }}</b></button>{% endfor %}
+  <span class="muted ax-pend-total">{{ n_pending }} per decidir · {{ n_all }} línies en total</span>
+</div>
+
+{% for g in groups %}
+<section class="ax-pend-group" id="ax-pend-{{ g.key }}" data-group="{{ g.key }}" {% if g.collapsed %}data-collapsed="1"{% endif %}>
+  <h2 class="ax-h2 ax-pend-title"><button type="button" class="ax-pend-toggle" aria-expanded="{% if g.collapsed %}false{% else %}true{% endif %}"><svg class="icon ax-chevron" aria-hidden="true"><use href="#i-chevron"/></svg> <span class="ax-sev ax-sev-{{ g.severity }}">{{ g.n }}</span> {{ g.title }}</button> <span class="muted ax-pend-hint">{{ g.hint }}</span></h2>
+  <div class="ax-pend-body">
+  {% if not g.rows %}
+  <p class="muted ax-pend-empty">Res pendent ací.</p>
+  {% elif g.key == 'fora' %}
+  <div class="table-wrapper"><table class="ax-table ax-findings">
+    <thead><tr><th>Disc</th><th>Carpeta de nivell 1</th><th class="num">Mida</th><th class="num ax-detail">Fitxers</th><th class="col-links"></th></tr></thead>
+    <tbody>
+    {% for d in g.drives %}
+      {% for o in d.outside %}
+      <tr class="ax-f-avis">
+        <td>{% if loop.first %}<a class="ax-cov-link" href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ d.drive_id | urlencode }}">{{ d.drive_id }}</a> <span class="muted">{{ '%.0f' | format(d.pct) }} %</span>{% endif %}</td>
+        <td class="mono"><a href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ d.drive_id | urlencode }}&amp;carpeta={{ o.api_path | urlencode }}" title="Cobertura d'aquesta carpeta">{{ o.level1 }}</a></td>
+        <td class="num ax-warn">{{ o.bytes | format_bytes }}</td>
+        <td class="num muted ax-detail">{{ '{:,}'.format(o.files).replace(',', '.') }}</td>
+        <td class="col-links"><a class="btn btn-sm ax-action" href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ d.drive_id | urlencode }}&amp;afegir={{ o.api_path | urlencode }}">afegeix a l'arxiu</a> <a class="ax-link" href="{{ request.url_for('explorador_route') }}?drive={{ d.drive_id | urlencode }}&amp;path={{ o.api_path | urlencode }}">explorador</a></td>
+      </tr>
+      {% if loop.last and d.outside_more %}<tr class="ax-f-more"><td></td><td colspan="4" class="muted">i {{ d.outside_more }} carpetes més de més d'1 GB: <a href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ d.drive_id | urlencode }}">cobertura de {{ d.drive_id }}</a></td></tr>{% endif %}
+      {% endfor %}
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="table-wrapper"><table class="ax-table ax-findings">
+    <thead><tr>{% if g.key in ('errors', 'altres') %}<th>Tipus</th>{% endif %}<th>{% if g.key == 'sense-canonica' %}Projecte{% else %}Detall{% endif %}</th>{% if g.key != 'sense-canonica' %}<th>Espai</th>{% endif %}<th class="col-links"></th></tr></thead>
+    <tbody>
+    {% for f in g.rows %}
+    <tr class="ax-f-{{ f.severity }} ax-pend-row" data-space="{{ f.space_id or '' }}" data-item="{{ f.item_id or '' }}" data-label="{{ f.drive_id }}\{{ f.path }}">
+      {% if g.key in ('errors', 'altres') %}<td class="mono ax-f-kind">{{ f.kind }}</td>{% endif %}
+      <td class="ax-f-detail">
+        {% if g.key == 'sense-canonica' %}
+          <a class="ax-cov-link" href="{{ request.url_for('arxiu_arbre_route') }}?espai={{ f.space_id }}">{{ f.space_path }}</a>
+        {% elif f.path is defined and f.path is not none and g.key != 'niats' %}
+          <span class="ax-pathline"><strong class="ax-f-drive">{{ f.drive_id }}</strong> {{ path_trunc(f, request.url_for('explorador_route') ~ '?drive=' ~ (f.drive_id | urlencode) ~ '&path=' ~ (f.api_path | urlencode)) }}</span>
+          {% if g.key != 'sense-paper' %}<span class="ax-f-msg muted">{{ f.message }}</span>{% endif %}
+        {% else %}
+          <span class="ax-f-msg">{{ f.message }}</span>
+        {% endif %}
+      </td>
+      {% if g.key != 'sense-canonica' %}<td class="ax-f-space">{% if f.space_id %}<a href="{{ request.url_for('arxiu_arbre_route') }}?espai={{ f.space_id }}" title="Obre l'espai a l'arbre">{{ f.space_path | replace('ARXIU\\', '') }}</a>{% endif %}{% if f.other_space_path %} <span class="muted">i</span> <a href="{{ request.url_for('arxiu_arbre_route') }}?espai={{ f.other_space_id }}">{{ f.other_space_path | replace('ARXIU\\', '') }}</a>{% endif %}</td>{% endif %}
+      <td class="col-links">
+        {% if g.key == 'sense-paper' %}
+          <span class="ax-action"><button type="button" class="btn btn-sm ax-pend-act" data-act="role">canvia el paper</button> <button type="button" class="btn btn-sm ax-pend-act ax-btn-danger" data-act="remove">treu de l'espai</button></span>
+        {% elif g.key == 'sense-canonica' %}
+          <a class="btn btn-sm ax-action" href="{{ request.url_for('arxiu_arbre_route') }}?espai={{ f.space_id }}">tria la canònica</a>
+        {% elif f.kind == 'origen-absent' %}
+          <span class="ax-action"><button type="button" class="btn btn-sm ax-pend-act ax-btn-danger" data-act="remove">treu de l'espai</button></span>
+        {% endif %}
+        {% if f.api_path is defined and g.key != 'sense-paper' %}<a class="ax-link" href="{{ request.url_for('explorador_route') }}?drive={{ f.drive_id | urlencode }}&amp;path={{ f.api_path | urlencode }}">explorador</a>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  </div>
+</section>
+{% endfor %}
+<p class="form-hint">Temps de càlcul: {{ '%.2f' | format(elapsed) }} s.</p>
+<script src="{{ static_url(request, 'arxiu.js') }}"></script>
+{% endblock %}

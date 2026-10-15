@@ -547,9 +547,12 @@ niats d'altres espais), destí final, fitxers, bytes i únics. Es nega si `--che
 
 ### Interfície («Arxiu» al menú; `app/routes/arxiu.py`, `app/arxiu_cache.py`, `app/arxiu_actions.py`, `app/static/arxiu.js`)
 
-Tres pàgines sobre els mateixos càlculs: `/arxiu` (arbre de destí, `?arrel=ID` per a un subarbre,
-`?espai=ID` per desplegar fins a un espai, `?refresca=1` per recalcular), `/arxiu/cobertura`
-(`?disc=`, `&afegir=ruta` preselecciona una carpeta) i `/arxiu/comprovacions`. L'ús es descriu a
+Quatre pàgines sobre els mateixos càlculs: `/arxiu` (entrada: xifres, discs amb % cobert i fons),
+`/arxiu/arbre` (arbre de destí, `?arrel=ID` per a un subarbre, `?espai=ID` per desplegar fins a un
+espai, `?refresca=1` per recalcular), `/arxiu/cobertura` (`?disc=&carpeta=` navega carpeta a
+carpeta; `&afegir=ruta` preselecciona una carpeta) i `/arxiu/pendents` (el que queda per decidir,
+ordenat per feina). Els commutadors «detalls» i «edició» de les pestanyes amaguen per defecte els
+camps per executar i els botons d'acció. L'ús es descriu a
 `docs/usage.md`.
 
 - **Memòria cau** (`arxiu_cache`): una connexió dedicada de només lectura en mode autocommit (les

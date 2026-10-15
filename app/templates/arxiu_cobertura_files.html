@@ -1,12 +1,12 @@
 {# Files d'un nivell de la cobertura navegable (també servides com a fragment per al desplegament en línia). #}
 {% for r in rows %}
 <tr class="ax-cov-row{% if r.kind == 'files' %} ax-cov-files{% endif %}{% if r.member or r.inside %} ax-cov-covered{% endif %}" data-path="{{ r.api_path }}" data-parent="{{ parent_path }}" data-level="{{ r.level }}" data-bytes="{{ r.bytes }}" data-unc="{{ r.uncovered_bytes }}" data-files="{{ r.files }}" data-name="{{ r.name | lower }}" data-year="{{ r.year }}" data-kind="{{ r.kind }}" aria-expanded="false">
-  <td class="col-sel">{% if r.kind == 'folder' and r.uncovered_bytes and not r.inside and not r.member %}<input type="checkbox" class="ax-sel" aria-label="Selecciona {{ r.name }}">{% endif %}</td>
+  <td class="col-sel ax-action">{% if r.kind == 'folder' and r.uncovered_bytes and not r.inside and not r.member %}<input type="checkbox" class="ax-sel" aria-label="Selecciona {{ r.name }}">{% endif %}</td>
   <td class="ax-cov-name"><div class="ax-cov-nameline">
     <span class="ax-cov-indent" style="width: {{ (r.level - 1) * 1.4 }}em"></span>
     {% if r.kind == 'folder' and r.folders > 1 %}<button type="button" class="ax-toggle ax-cov-toggle" aria-label="Desplega les subcarpetes" title="Desplega les subcarpetes ací mateix"><svg class="icon ax-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></button>{% else %}<span class="ax-toggle ax-toggle-leaf"></span>{% endif %}
     {% if r.kind == 'folder' %}<a class="ax-cov-link" href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ disc | urlencode }}&amp;carpeta={{ r.api_path | urlencode }}" title="{{ r.path }} — baixa a aquesta carpeta">{{ r.name }}</a>{% else %}<span class="muted" title="Fitxers directes d'aquesta carpeta (sense subcarpetes)">(fitxers directes)</span>{% endif %}
-    {% for mm in r.member %}<a class="ax-role ax-role-{{ mm.role }} ax-cov-member" href="{{ request.url_for('arxiu_route') }}?espai={{ mm.space_id }}" title="{{ role_label[mm.role] }} a {{ mm.space_path }}">{{ role_short[mm.role] }} {{ mm.space_path | replace('ARXIU\\', '') }}</a>{% endfor %}
+    {% for mm in r.member %}<a class="ax-role ax-role-{{ mm.role }} ax-cov-member" href="{{ request.url_for('arxiu_arbre_route') }}?espai={{ mm.space_id }}" title="{{ role_label[mm.role] }} a {{ mm.space_path }}">{{ role_short[mm.role] }} {{ mm.space_path | replace('ARXIU\\', '') }}</a>{% endfor %}
     {% if r.inside %}<span class="ax-badge" title="Dins del membre {{ r.inside.path }} ({% for mm in r.inside.members %}{{ role_label[mm.role] }} a {{ mm.space_path }}{% if not loop.last %}; {% endif %}{% endfor %})">dins de {{ r.inside.path | truncate(40, True) }}</span>{% endif %}
     {% if r.members_under %}<span class="ax-badge" title="Conté {{ r.members_under }} membres de l'arxiu; la part fora és el que no és de cap">{{ r.members_under }} membre{% if r.members_under != 1 %}s{% endif %} dins</span>{% endif %}
   </div></td>
@@ -14,9 +14,9 @@
   <td class="num {% if r.uncovered_bytes %}ax-warn{% else %}muted{% endif %}">{% if r.uncovered_bytes %}{{ r.unc_h }}{% else %}—{% endif %}</td>
   <td class="num bytes">{{ r.bytes_h }}</td>
   <td class="num muted">{{ '%.1f' | format(r.pct_disc) }} %</td>
-  <td class="num muted ax-col-files">{{ '{:,}'.format(r.files).replace(',', '.') }}</td>
+  <td class="num muted ax-col-files ax-detail">{{ '{:,}'.format(r.files).replace(',', '.') }}</td>
   <td class="ax-dom">{% if r.year %}{{ r.year }} <span class="muted">{{ '%.0f' | format(r.year_pct) }} %</span>{% endif %}</td>
   <td class="ax-dom">{% if r.cls %}<span class="ax-cls ax-cls-{{ r.cls | lower }}">{{ r.cls }}</span> <span class="muted">{{ '%.0f' | format(r.cls_pct) }} %</span>{% endif %}</td>
-  <td class="col-act"><button type="button" class="ax-more" aria-haspopup="menu" aria-expanded="false" title="Accions" aria-label="Accions de {{ r.name or 'fitxers directes' }}"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td>
+  <td class="col-act ax-action"><button type="button" class="ax-more" aria-haspopup="menu" aria-expanded="false" title="Accions" aria-label="Accions de {{ r.name or 'fitxers directes' }}"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td>
 </tr>
 {% endfor %}

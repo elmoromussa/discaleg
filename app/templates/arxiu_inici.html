@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Arxiu — Discàleg{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ static_url(request, 'arxiu.css') }}">{% endblock %}
+{% block body_class %}page-wide{% endblock %}
+{% block content %}
+<h1>Arxiu <span class="h1-sub">arxiu virtual: l'arxiu de destí muntat dins de la base de dades, abans de moure cap fitxer</span></h1>
+{% include "arxiu_tabs.html" %}
+
+<section class="ax-figures" aria-label="Xifres de l'arxiu">
+  <a class="ax-figure" href="{{ request.url_for('arxiu_arbre_route') }}">
+    <span class="ax-figure-num">{{ total_bytes | format_bytes }}</span>
+    <span class="ax-figure-label">en espais d'arxiu</span>
+    <span class="ax-figure-sub">{{ '{:,}'.format(total_files).replace(',', '.') }} fitxers · {{ n_spaces }} espais · {{ n_members }} membres</span>
+  </a>
+  <a class="ax-figure" href="{{ request.url_for('arxiu_arbre_route') }}">
+    <span class="ax-figure-num">{{ unique_bytes | format_bytes }}</span>
+    <span class="ax-figure-label">únics</span>
+    <span class="ax-figure-sub">bytes dels membres canònica i part sense cap còpia fora del seu espai</span>
+  </a>
+  <a class="ax-figure {% if n_drives_covered < drives | length %}ax-figure-warn{% endif %}" href="{{ request.url_for('arxiu_cobertura_route') }}">
+    <span class="ax-figure-num">{{ n_drives_covered }} <span class="ax-figure-of">de {{ drives | length }}</span></span>
+    <span class="ax-figure-label">discs coberts</span>
+    <span class="ax-figure-sub">amb el {{ '%.0f' | format(covered_pct) }} % o més dels bytes dins d'algun espai</span>
+  </a>
+  <a class="ax-figure {% if n_err %}ax-figure-err{% elif n_pending %}ax-figure-warn{% endif %}" href="{{ request.url_for('arxiu_pendents_route') }}">
+    <span class="ax-figure-num">{{ n_pending }}</span>
+    <span class="ax-figure-label">pendents</span>
+    <span class="ax-figure-sub">{% if n_err %}{{ n_err }} errors · {% endif %}projectes sense canònica i membres sense paper</span>
+  </a>
+</section>
+
+<div class="ax-inici-cols">
+<section class="ax-inici-block" aria-label="Discs">
+  <h2 class="ax-h2">Discs <span class="muted">cobert per l'arxiu virtual</span></h2>
+  <table class="ax-table ax-discs">
+    <thead><tr><th>Disc</th><th class="ax-cov-barhead">Cobert / fora</th><th class="num">%</th><th class="num">Fora de tot espai</th><th class="num ax-detail">Total</th><th></th></tr></thead>
+    <tbody>
+    {% for d in drives %}
+    <tr class="{% if not d.is_covered %}ax-disc-warn{% endif %}">
+      <td><a class="ax-cov-link" href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ d.drive_id | urlencode }}">{{ d.drive_id }}</a></td>
+      <td class="ax-cov-barcell"><div class="ax-bar" title="Cobert {{ '%.1f' | format(d.pct) }} %"><i class="ax-bar-cov" style="width: {{ '%.2f' | format(d.pct) }}%"></i><i class="ax-bar-unc" style="width: {{ '%.2f' | format(100 - d.pct) }}%"></i></div></td>
+      <td class="num">{{ '%.1f' | format(d.pct) }} %</td>
+      <td class="num {% if d.uncovered_bytes %}ax-warn{% else %}muted{% endif %}">{{ d.uncovered_bytes | format_bytes }}</td>
+      <td class="num muted ax-detail">{{ d.drive_bytes | format_bytes }}</td>
+      <td class="col-links"><a href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ d.drive_id | urlencode }}">cobertura</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="ax-inici-block" aria-label="Fons">
+  <h2 class="ax-h2">Fons <span class="muted">arrels de l'arbre de destí</span></h2>
+  <table class="ax-table ax-sumtable">
+    <tbody>
+    {% for f in fons %}
+    <tr class="ax-kind-{{ f.kind }}">
+      <td><span class="ax-kind">{{ kind_label[f.kind] }}</span></td>
+      <td><a class="ax-cov-link" href="{{ request.url_for('arxiu_arbre_route') }}?arrel={{ f.totals.space_id }}">{{ f.name }}</a></td>
+      <td class="num"><strong>{{ f.totals.bytes | format_bytes }}</strong></td>
+      <td class="num muted ax-detail">{{ '{:,}'.format(f.totals.files).replace(',', '.') }} fitxers</td>
+      <td class="num">únics <strong>{{ f.totals.unique_bytes | format_bytes }}</strong></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="form-hint">Calculat en {{ '%.1f' | format(elapsed) }} s{% if cache.built_utc %} · memòria cau de les {{ cache.built_utc[11:16] }}{% endif %} · <a href="{{ request.url_for('arxiu_route') }}?refresca=1">recalcula</a>. L'ús es descriu a <code>docs/migracio.md</code>.</p>
+</section>
+</div>
+<script src="{{ static_url(request, 'arxiu.js') }}"></script>
+{% endblock %}

@@ -43,7 +43,7 @@
 </section>
 
 {% if level %}
-<form class="ax-addbar card" id="ax-addbar" data-drive="{{ coverage.drive_id }}" aria-label="Afegir les carpetes seleccionades a l'arxiu virtual">
+<form class="ax-addbar card ax-action" id="ax-addbar" data-drive="{{ coverage.drive_id }}" aria-label="Afegir les carpetes seleccionades a l'arxiu virtual">
   <span class="ax-addbar-count" id="ax-sel-count">Cap carpeta seleccionada</span>
   <label>Espai <input list="ax-spaces" id="ax-add-space" placeholder="nom o ruta de l'espai…" autocomplete="off" required></label>
   <label>Paper <select id="ax-add-role"><option value="">?</option>{% for r in roles %}<option value="{{ r }}">{{ role_short[r] }} · {{ role_label[r] }}</option>{% endfor %}</select></label>
@@ -66,7 +66,7 @@
   </span>
   <span class="ax-cov-headact">
     {% if level.folder %}<a class="ax-link" href="{{ request.url_for('explorador_route') }}?drive={{ disc | urlencode }}&amp;path={{ level.api_path | urlencode }}">explorador</a>{% endif %}
-    {% if level.folder and level.uncovered_bytes and not level.inside %}<button type="button" class="btn btn-sm" id="ax-add-here" data-path="{{ level.api_path }}" title="Selecciona aquesta carpeta sencera per afegir-la a l'arxiu">Afegeix aquesta carpeta</button>{% endif %}
+    {% if level.folder and level.uncovered_bytes and not level.inside %}<button type="button" class="btn btn-sm ax-action" id="ax-add-here" data-path="{{ level.api_path }}" title="Selecciona aquesta carpeta sencera per afegir-la a l'arxiu">Afegeix aquesta carpeta</button>{% endif %}
   </span>
 </div>
 
@@ -80,16 +80,16 @@
 <div class="table-wrapper">
   <table class="ax-table ax-coverage" id="ax-coverage" data-disc="{{ disc }}" data-files-url="{{ request.url_for('arxiu_cobertura_files_route') }}">
     <thead><tr>
-      <th class="col-sel"><input type="checkbox" id="ax-sel-all" title="Selecciona totes les carpetes d'aquest nivell que tenen alguna cosa fora"></th>
+      <th class="col-sel ax-action"><input type="checkbox" id="ax-sel-all" title="Selecciona totes les carpetes d'aquest nivell que tenen alguna cosa fora"></th>
       <th class="ax-sortable" data-sort="name">Carpeta</th>
       <th class="ax-cov-barhead" title="Part de la carpeta de dalt: cobert (verd) i fora de l'arxiu (taronja)">Cobert / fora</th>
       <th class="num ax-sortable" data-sort="unc" title="Bytes fora de tot espai d'arxiu">Fora</th>
       <th class="num ax-sortable ax-sort-active" data-sort="bytes" title="Mida total de la carpeta">Mida</th>
       <th class="num" title="% del disc">% disc</th>
-      <th class="num ax-sortable ax-col-files" data-sort="files">Fitxers</th>
+      <th class="num ax-sortable ax-col-files ax-detail" data-sort="files">Fitxers</th>
       <th class="ax-sortable" data-sort="year" title="Any de modificació amb més fitxers fora de l'arxiu (i el seu %)">Any</th>
       <th title="Classe d'anàlisi amb més bytes fora de l'arxiu (i el seu %)">Tipus</th>
-      <th class="col-act"></th>
+      <th class="col-act ax-action"></th>
     </tr></thead>
     <tbody>
       {% with rows = level.rows, parent_path = level.api_path %}{% include "arxiu_cobertura_files.html" %}{% endwith %}
