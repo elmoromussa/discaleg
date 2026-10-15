@@ -104,6 +104,11 @@ def info() -> dict[str, Any]:
     return {"built_utc": _state["built_utc"], "elapsed": _state["elapsed"]}
 
 
+def stamps() -> tuple[Any, Any]:
+    """Segells (inventari, membres) de l'ArxiuCalc actual: clau de les memòries cau derivades."""
+    return _state["inv_stamp"], _state["mem_stamp"]
+
+
 def reset() -> None:
     """Oblida la memòria cau (proves, o quan canvia DATABASE_PATH)."""
     with _lock:

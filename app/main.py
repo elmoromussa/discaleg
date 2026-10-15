@@ -130,10 +130,19 @@ def arxiu_route(request: Request, refresca: int = 0, arrel: int = 0, conn: sqlit
 
 
 @app.get("/arxiu/cobertura", name="arxiu_cobertura_route")
-def arxiu_cobertura_route(request: Request, disc: str = "", conn: sqlite3.Connection = Depends(get_db)):
-    """Què queda de cada disc fora de tot espai d'arxiu."""
+def arxiu_cobertura_route(request: Request, disc: str = "", carpeta: str = "",
+                          conn: sqlite3.Connection = Depends(get_db)):
+    """Què queda de cada disc fora de tot espai d'arxiu; amb `disc` i `carpeta`, nivell a nivell."""
     from app.routes import arxiu
-    return arxiu.cobertura_page(request, templates, conn, disc.strip())
+    return arxiu.cobertura_page(request, templates, conn, disc.strip(), carpeta)
+
+
+@app.get("/arxiu/cobertura/files", name="arxiu_cobertura_files_route")
+def arxiu_cobertura_files_route(request: Request, disc: str = "", carpeta: str = "", nivell: int = 1,
+                                conn: sqlite3.Connection = Depends(get_db)):
+    """Files HTML d'un nivell de la cobertura (desplegament en línia a la pàgina)."""
+    from app.routes import arxiu
+    return arxiu.cobertura_files(request, templates, disc.strip(), carpeta, nivell)
 
 
 @app.get("/arxiu/comprovacions", name="arxiu_comprovacions_route")

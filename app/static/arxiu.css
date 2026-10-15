@@ -327,10 +327,6 @@ html.dark .ax-role { color: #1e1e1e; }
 .ax-table td.num, .ax-table th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ax-table .mono { word-break: normal; overflow-wrap: anywhere; }
 .ax-warn { color: var(--ax-der); font-weight: 600; }
-.ax-coverage .ax-l1 td { font-weight: 600; }
-.ax-coverage .ax-l2 td { color: var(--text-muted); font-size: 0.95em; }
-.ax-coverage .ax-l2 td.mono a { color: var(--text-muted); }
-.ax-indent { display: inline-block; width: 1.6em; }
 .ax-drives { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.75rem; }
 .ax-drives .changes-tab { padding: 0.15rem 0.6rem; font-size: 0.82rem; }
 .ax-sev { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; border-radius: 3px; padding: 0 0.3rem; color: #fff; background: var(--ax-none); }
@@ -369,12 +365,47 @@ html.dark .ax-role { color: #1e1e1e; }
 .ax-members td.ax-editing .ax-inline-ctrl { width: 100%; min-width: 0; }
 .ax-childform { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin: 0.2rem 0 0.3rem 28px; font-size: 0.85rem; }
 
+/* Cobertura navegable: barres proporcionals, nivells, capçalera de carpeta */
+.ax-bar { display: flex; height: 10px; width: 100%; min-width: 60px; background: var(--table-stripe); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
+.ax-bar i { display: block; height: 100%; }
+.ax-bar-cov { background: var(--ax-can); opacity: 0.55; }
+.ax-bar-unc { background: var(--ax-part); }
+.ax-bar-lg { height: 14px; }
+.ax-cov-barhead { width: 16%; min-width: 90px; }
+.ax-cov-barcell { vertical-align: middle; }
+.ax-covbar { flex-basis: 100%; display: flex; align-items: center; gap: 0.6rem; font-size: 0.82rem; color: var(--text-muted); }
+.ax-covbar .ax-bar { flex: 1 1 auto; }
+.ax-covbar-label { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ax-cov-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; margin: 0.2rem 0 0.4rem; font-size: 0.9rem; }
+.ax-cov-head .ax-crumbs { margin: 0; }
+.ax-cov-headnums { font-variant-numeric: tabular-nums; }
+.ax-cov-headact { margin-left: auto; display: inline-flex; gap: 0.6rem; align-items: center; }
+.ax-cov-toolbar { margin-bottom: 0.3rem; }
+.ax-coverage th, .ax-coverage td { padding: 0.2rem 0.55rem; white-space: nowrap; }
+.ax-coverage td.ax-cov-name { width: 34%; max-width: 0; }
+.ax-cov-nameline { display: flex; align-items: center; gap: 0.35rem; min-width: 0; overflow: hidden; }
+.ax-coverage .ax-cov-indent { display: inline-block; flex-shrink: 0; }
+.ax-coverage .ax-cov-toggle, .ax-coverage .ax-toggle-leaf { flex-shrink: 0; width: 18px; height: 18px; display: inline-flex; }
+.ax-coverage tr[aria-expanded="true"] .ax-cov-toggle .ax-chevron { transform: rotate(90deg); }
+.ax-coverage .ax-cov-loading .ax-chevron { opacity: 0.3; }
+.ax-cov-link { color: var(--text); text-decoration: none; font-weight: 600; overflow: hidden; text-overflow: ellipsis; min-width: 3em; }
+.ax-cov-link:hover { color: var(--link); text-decoration: underline; }
+.ax-cov-covered .ax-cov-link { font-weight: 400; color: var(--text-muted); }
+.ax-cov-files td { color: var(--text-muted); }
+.ax-cov-member { text-decoration: none; max-width: 22em; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: middle; }
+.ax-cov-member:hover { text-decoration: underline; }
+.ax-coverage tbody tr[data-level="2"] td, .ax-coverage tbody tr[data-level="3"] td, .ax-coverage tbody tr[data-level="4"] td, .ax-coverage tbody tr[data-level="5"] td { font-size: 0.95em; }
+.ax-sortable { cursor: pointer; user-select: none; }
+.ax-sortable:hover { color: var(--link); }
+.ax-sort-active::after { content: " ▾"; font-size: 0.8em; opacity: 0.8; }
+.ax-sort-active.ax-sort-asc::after { content: " ▴"; }
+.ax-overview .ax-cov-link { font-weight: 600; }
+.ax-overview .ax-cov-barhead { width: 12%; }
+
 /* Cobertura: selecció i barra d'afegir */
 .ax-coverage .col-sel { width: 2em; text-align: center; }
 .ax-coverage tr.ax-selected td { background: var(--primary-bg); }
-.ax-coverage .col-act { width: 5em; white-space: nowrap; }
-.ax-coverage .col-act .ax-act { opacity: 0.35; }
-.ax-coverage tr:hover .col-act .ax-act { opacity: 1; }
+.ax-coverage .col-act { width: 2.4em; padding: 0 0.2rem; text-align: center; }
 .ax-addbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: center; padding: 0.6rem 0.9rem; margin-bottom: 0.6rem; font-size: 0.86rem; position: sticky; top: 0; z-index: 6; }
 .ax-addbar label { display: inline-flex; gap: 0.3rem; align-items: center; }
 .ax-addbar input, .ax-addbar select { font: inherit; font-size: 0.85rem; padding: 0.2rem 0.4rem; border: 1px solid var(--border); border-radius: 3px; background: var(--card-bg); color: var(--text); }

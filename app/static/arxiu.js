@@ -6,7 +6,9 @@
  *   (mou, treu, explorador, cobertura, edita) i per espai (fill, reanomena, estat, mou, ordena,
  *   esborra); amplades de columna compartides per totes les taules de membres, amb nanses a les
  *   capçaleres i persistència («reinicia amplades» les torna al valor inicial).
- * - Cobertura: selecció múltiple de carpetes i «Afegeix a l'arxiu» (espai, paper, destí, nota).
+ * - Cobertura: nivell a nivell (camí de molles) amb desplegament en línia (el servidor serveix
+ *   les files del nivell següent), llindar «amaga < 1 GB» persistent, ordenació, selecció
+ *   múltiple a qualsevol profunditat i «Afegeix a l'arxiu» (espai, paper, destí, nota).
  * - Totes les pàgines: «Desfés» (darrera acció) i registre d'accions.
  *
  * Cada acció crida l'API JSON (/api/arxiu/…) i recarrega la pàgina (el servidor té la memòria
@@ -656,68 +658,179 @@
     }
   }
 
-  // ----------------------------------------------------------------- cobertura
+  // ----------------------------------------------------------------- cobertura navegable
   var cov = document.getElementById('ax-coverage');
   var addbar = document.getElementById('ax-addbar');
   if (cov && addbar) initCoverage();
 
   function initCoverage() {
+    var COV_KEY = 'arxiu.cov.v1';
+    var prefs = loadStored(COV_KEY, {});
+    if (prefs.hideSmall == null) prefs.hideSmall = true;
     var drive = addbar.dataset.drive;
-    var boxes = Array.prototype.slice.call(cov.querySelectorAll('input.ax-sel'));
+    var filesUrl = cov.dataset.filesUrl;
+    var tbody = cov.querySelector('tbody');
     var all = document.getElementById('ax-sel-all');
     var countEl = document.getElementById('ax-sel-count');
     var btn = document.getElementById('ax-add-btn');
-    var lastIndex = -1;
+    var hideSmall = document.getElementById('ax-cov-hide-small');
+    var hiddenEl = document.getElementById('ax-cov-hidden');
+    var lastBox = null;
+    var SMALL = 1e9;
 
+    function rows() { return Array.prototype.slice.call(tbody.querySelectorAll('tr.ax-cov-row')); }
+    function boxes() { return Array.prototype.slice.call(tbody.querySelectorAll('input.ax-sel')); }
     function selected() {
-      return boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.closest('tr').dataset.path; });
+      return boxes().filter(function (b) { return b.checked; }).map(function (b) { return b.closest('tr').dataset.path; });
     }
     function update() {
-      var n = selected().length;
+      var paths = selected();
+      var n = paths.length + (addbar.dataset.extra ? 1 : 0);
       if (countEl) countEl.textContent = n ? (n + (n === 1 ? ' carpeta seleccionada' : ' carpetes seleccionades')) : 'Cap carpeta seleccionada';
       if (btn) btn.disabled = !n;
-      boxes.forEach(function (b) { b.closest('tr').classList.toggle('ax-selected', b.checked); });
+      boxes().forEach(function (b) { b.closest('tr').classList.toggle('ax-selected', b.checked); });
     }
-    boxes.forEach(function (b, i) {
-      b.addEventListener('click', function (ev) {
-        if (ev.shiftKey && lastIndex >= 0) {
-          var lo = Math.min(lastIndex, i), hi = Math.max(lastIndex, i);
-          for (var k = lo; k <= hi; k++) boxes[k].checked = b.checked;
-        }
-        lastIndex = i;
-        update();
+    function rowByPath(path) {
+      var all = rows();
+      for (var i = 0; i < all.length; i++) if (all[i].dataset.path === path) return all[i];
+      return null;
+    }
+    function applyThreshold() {
+      var hidden = 0;
+      rows().forEach(function (tr) {
+        var small = prefs.hideSmall && parseInt(tr.dataset.bytes, 10) < SMALL && !tr.classList.contains('ax-selected');
+        var parentHidden = false;
+        var p = tr.dataset.parentRow != null ? rowByPath(tr.dataset.parentRow) : null;
+        if (p && (p.hidden || p.getAttribute('aria-expanded') !== 'true')) parentHidden = true;
+        tr.hidden = small || parentHidden;
+        if (small && !parentHidden) hidden++;
       });
+      if (hiddenEl) hiddenEl.textContent = hidden ? ('(' + hidden + ' de menys d’1 GB amagad' + (hidden === 1 ? 'a' : 'es') + ')') : '';
+    }
+    if (hideSmall) {
+      hideSmall.checked = prefs.hideSmall;
+      hideSmall.addEventListener('change', function () { prefs.hideSmall = hideSmall.checked; store(COV_KEY, prefs); applyThreshold(); });
+    }
+
+    tbody.addEventListener('click', function (ev) {
+      var b = ev.target.closest('input.ax-sel');
+      if (b) {
+        var bs = boxes();
+        var i = bs.indexOf(b), j = bs.indexOf(lastBox);
+        if (ev.shiftKey && j >= 0) {
+          var lo = Math.min(i, j), hi = Math.max(i, j);
+          for (var k = lo; k <= hi; k++) if (!bs[k].closest('tr').hidden) bs[k].checked = b.checked;
+        }
+        lastBox = b;
+        update();
+        return;
+      }
+      var tg = ev.target.closest('.ax-cov-toggle');
+      if (tg) { ev.preventDefault(); toggleRow(tg.closest('tr')); return; }
+      var more = ev.target.closest('.ax-more');
+      if (more) { ev.preventDefault(); rowMenu(more); }
     });
+
+    // desplegament en línia: demana les files del nivell següent al servidor i les insereix
+    function toggleRow(tr) {
+      if (tr.getAttribute('aria-expanded') === 'true') {
+        tr.setAttribute('aria-expanded', 'false');
+        applyThreshold();
+        return;
+      }
+      if (tr.dataset.loaded) { tr.setAttribute('aria-expanded', 'true'); applyThreshold(); return; }
+      tr.classList.add('ax-cov-loading');
+      var level = parseInt(tr.dataset.level, 10) + 1;
+      fetch(filesUrl + '?' + qs({ disc: drive, carpeta: tr.dataset.path, nivell: level }))
+        .then(function (r) { return r.text(); })
+        .then(function (html) {
+          var tpl = document.createElement('template');
+          tpl.innerHTML = '<table><tbody>' + html + '</tbody></table>';
+          var frag = document.createDocumentFragment();
+          Array.prototype.forEach.call(tpl.content.querySelectorAll('tr'), function (r) { r.dataset.parentRow = tr.dataset.path; frag.appendChild(r); });
+          tr.after(frag);
+          tr.dataset.loaded = '1';
+          tr.setAttribute('aria-expanded', 'true');
+          tr.classList.remove('ax-cov-loading');
+          applyThreshold();
+        })
+        .catch(function () { tr.classList.remove('ax-cov-loading'); msg('No s’ha pogut carregar el nivell.', true); });
+    }
+
+    function rowMenu(btn) {
+      if (menuState.open && menuState.anchorBtn === btn) { closeMenu(); return; }
+      var tr = btn.closest('tr');
+      var path = tr.dataset.path, isFolder = tr.dataset.kind === 'folder';
+      var items = [];
+      var box = tr.querySelector('input.ax-sel');
+      if (box) items.push({ label: 'Afegeix a l’arxiu…', icon: 'i-plus', action: function () {
+        boxes().forEach(function (x) { x.checked = false; });
+        box.checked = true; update(); document.getElementById('ax-add-space').focus();
+      } });
+      if (isFolder) {
+        items.push({ label: 'Cobertura d’aquesta carpeta', icon: 'i-subtree', href: (URLS.cobertura || '/arxiu/cobertura') + '?' + qs({ disc: drive, carpeta: path }) });
+        items.push({ label: 'Obre a l’explorador', icon: 'i-folder-open', href: (URLS.explorador || '/explorador') + '?' + qs({ drive: drive, path: path }) });
+      } else {
+        items.push({ label: 'Obre la carpeta a l’explorador', icon: 'i-folder-open', href: (URLS.explorador || '/explorador') + '?' + qs({ drive: drive, path: path }) });
+      }
+      var member = tr.querySelector('.ax-cov-member');
+      if (member) items.push({ label: 'Ves a l’espai de l’arxiu', icon: 'i-tag', href: member.getAttribute('href') });
+      openMenu(items, btn, drive + ' › ' + path.split('/').join(' › '));
+    }
+
     if (all) {
       all.addEventListener('change', function () {
-        boxes.forEach(function (b) { if (b.closest('tr').dataset.level === '1') b.checked = all.checked; else if (all.checked === false) b.checked = false; });
+        boxes().forEach(function (b) { var tr = b.closest('tr'); if (tr.dataset.parentRow != null) return; if (!tr.hidden) b.checked = all.checked; });
         update();
       });
     }
-    cov.addEventListener('click', function (ev) {
-      var b = ev.target.closest('.ax-act[data-act="pick"]');
-      if (!b) return;
-      boxes.forEach(function (x) { x.checked = false; });
-      var box = b.closest('tr').querySelector('input.ax-sel');
-      if (box) box.checked = true;
-      update();
-      document.getElementById('ax-add-space').focus();
+    // ordenació de les files del nivell (plega el que estiga desplegat)
+    cov.querySelectorAll('th.ax-sortable').forEach(function (th) {
+      th.addEventListener('click', function () {
+        var key = th.dataset.sort;
+        var asc = th.classList.contains('ax-sort-active') ? !th.classList.contains('ax-sort-asc') : (key === 'name');
+        cov.querySelectorAll('th.ax-sortable').forEach(function (x) { x.classList.remove('ax-sort-active', 'ax-sort-asc'); });
+        th.classList.add('ax-sort-active');
+        if (asc) th.classList.add('ax-sort-asc');
+        rows().forEach(function (tr) { if (tr.dataset.parentRow != null) tr.remove(); else { tr.removeAttribute('data-loaded'); tr.setAttribute('aria-expanded', 'false'); } });
+        var top = rows();
+        top.sort(function (a, b) {
+          var va, vb;
+          if (key === 'name' || key === 'year') { va = a.dataset[key] || ''; vb = b.dataset[key] || ''; return asc ? va.localeCompare(vb) : vb.localeCompare(va); }
+          va = parseFloat(a.dataset[key] || 0); vb = parseFloat(b.dataset[key] || 0);
+          return asc ? va - vb : vb - va;
+        });
+        top.forEach(function (tr) { tbody.appendChild(tr); });
+        applyThreshold();
+      });
     });
+    var addHere = document.getElementById('ax-add-here');
+    if (addHere) {
+      addHere.addEventListener('click', function () {
+        var path = addHere.dataset.path || '';
+        addbar.dataset.extra = path;
+        boxes().forEach(function (x) { x.checked = false; });
+        update();
+        if (countEl) countEl.textContent = 'Aquesta carpeta: ' + path;
+        document.getElementById('ax-add-space').focus();
+      });
+    }
     // ?afegir=ruta (enllaç des de l'explorador): preselecciona la carpeta
     var m = /[?&]afegir=([^&]+)/.exec(location.search);
     if (m) {
       var path = decodeURIComponent(m[1].replace(/\+/g, ' '));
-      var found = boxes.filter(function (b) { return b.closest('tr').dataset.path === path; });
+      var found = boxes().filter(function (b) { return b.closest('tr').dataset.path === path; });
       if (found.length) { found[0].checked = true; }
       else {
-        // carpeta més profunda que el nivell 2: s'afegeix com a element ocult de la selecció
+        // carpeta més profunda: s'afegeix com a element ocult de la selecció
         addbar.dataset.extra = path;
-        if (countEl) countEl.textContent = 'Carpeta: ' + path;
-        if (btn) btn.disabled = false;
       }
+      update();
+      if (!found.length && countEl) countEl.textContent = 'Carpeta: ' + path;
       document.getElementById('ax-add-space').focus();
     }
     update();
+    applyThreshold();
     addbar.addEventListener('submit', function (ev) {
       ev.preventDefault();
       var s = resolveSpace(document.getElementById('ax-add-space').value);

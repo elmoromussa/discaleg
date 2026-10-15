@@ -991,6 +991,8 @@
       items.push({ label: 'Afegeix a l’arxiu virtual…', icon: 'i-space',
         href: '/arxiu/cobertura?' + qs({ disc: drive, afegir: path }) });
     }
+    items.push({ label: 'Cobertura d’aquesta carpeta', icon: 'i-space',
+      href: '/arxiu/cobertura?' + qs({ disc: drive, carpeta: path }) });
     items.push({ sep: true });
     items.push({ label: 'Copia la ruta', icon: 'i-copy', action: function () { copyText(nativePathOf(path, drive)); } });
     return items;

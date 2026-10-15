@@ -3,7 +3,7 @@
 {% block head %}<link rel="stylesheet" href="{{ static_url(request, 'arxiu.css') }}">{% endblock %}
 {% block body_class %}page-wide{% endblock %}
 {% block content %}
-<h1>Arxiu <span class="h1-sub">cobertura: què queda de cada disc fora de tot espai d'arxiu</span></h1>
+<h1>Arxiu <span class="h1-sub">cobertura: què hi ha de cada disc dins i fora de l'arxiu virtual</span></h1>
 {% include "arxiu_tabs.html" %}
 
 <nav class="ax-drives" aria-label="Discs">
@@ -13,19 +13,19 @@
 
 {% if overview %}
 <div class="table-wrapper">
-  <table class="ax-table">
-    <thead><tr><th>Disc</th><th class="num">Total</th><th class="num">Cobert</th><th class="num">%</th>{% for rk in role_order %}<th class="num"><span class="ax-role ax-role-{{ rk }}">{{ role_short[rk] }}</span></th>{% endfor %}<th class="num">Fora de tot espai</th><th class="num">Fitxers fora</th><th></th></tr></thead>
+  <table class="ax-table ax-overview">
+    <thead><tr><th>Disc</th><th class="num">Total</th><th class="num">Cobert</th><th class="num">%</th><th class="ax-cov-barhead">Cobert / fora</th>{% for rk in role_order %}<th class="num"><span class="ax-role ax-role-{{ rk }}">{{ role_short[rk] }}</span></th>{% endfor %}<th class="num">Fora de tot espai</th><th class="num">Fitxers fora</th></tr></thead>
     <tbody>
       {% for o in overview %}
       <tr>
-        <td><strong>{{ o.drive_id }}</strong></td>
+        <td><a href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ o.drive_id | urlencode }}" class="ax-cov-link"><strong>{{ o.drive_id }}</strong></a></td>
         <td class="num bytes">{{ o.drive_bytes | format_bytes }}</td>
         <td class="num bytes">{{ o.covered_bytes | format_bytes }}</td>
-        <td class="num">{% if o.drive_bytes %}{{ '%.1f' | format(100.0 * o.covered_bytes / o.drive_bytes) }} %{% else %}—{% endif %}</td>
+        <td class="num">{% if o.drive_bytes %}{{ '%.1f' | format(o.pct) }} %{% else %}—{% endif %}</td>
+        <td class="ax-cov-barcell"><div class="ax-bar" title="Cobert {{ '%.1f' | format(o.pct) }} %"><i class="ax-bar-cov" style="width: {{ '%.2f' | format(o.pct) }}%"></i><i class="ax-bar-unc" style="width: {{ '%.2f' | format(100 - o.pct) }}%"></i></div></td>
         {% for rk in role_order %}<td class="num bytes muted">{% if rk in o.covered %}{{ o.covered[rk].bytes | format_bytes }}{% else %}—{% endif %}</td>{% endfor %}
         <td class="num bytes {% if o.uncovered_bytes %}ax-warn{% endif %}">{{ o.uncovered_bytes | format_bytes }}</td>
         <td class="num">{{ '{:,}'.format(o.uncovered_files).replace(',', '.') }}</td>
-        <td><a href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ o.drive_id | urlencode }}">Detall</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -39,9 +39,10 @@
   <div class="ax-sum"><div class="ax-sum-head">Cobert <strong>{{ '%.1f' | format(coverage.covered_pct) }} %</strong></div><div class="ax-sum-nums"><strong>{{ coverage.covered_bytes | format_bytes }}</strong> <span class="muted">· {{ '{:,}'.format(coverage.covered_files).replace(',', '.') }} fitxers</span></div>
     <div class="ax-sum-roles">{% for rk in role_order if rk in coverage.covered %}<span class="ax-role ax-role-{{ rk }}" title="{{ role_label[rk] }}: {{ coverage.covered[rk].members }} membres">{{ role_short[rk] }} <b>{{ coverage.covered[rk].bytes | format_bytes }}</b></span>{% endfor %}</div></div>
   <div class="ax-sum {% if coverage.uncovered_bytes %}ax-sum-warn{% endif %}"><div class="ax-sum-head">Fora de tot espai</div><div class="ax-sum-nums"><strong>{{ coverage.uncovered_bytes | format_bytes }}</strong> <span class="muted">· {{ '{:,}'.format(coverage.uncovered_files).replace(',', '.') }} fitxers</span></div></div>
+  <div class="ax-covbar" title="{{ coverage.drive_id }}: cobert {{ '%.1f' | format(coverage.covered_pct) }} %"><div class="ax-bar ax-bar-lg"><i class="ax-bar-cov" style="width: {{ '%.2f' | format(coverage.covered_pct) }}%"></i><i class="ax-bar-unc" style="width: {{ '%.2f' | format(100 - coverage.covered_pct) }}%"></i></div><span class="ax-covbar-label">{{ '%.1f' | format(coverage.covered_pct) }} % cobert</span></div>
 </section>
 
-{% if coverage.groups %}
+{% if level %}
 <form class="ax-addbar card" id="ax-addbar" data-drive="{{ coverage.drive_id }}" aria-label="Afegir les carpetes seleccionades a l'arxiu virtual">
   <span class="ax-addbar-count" id="ax-sel-count">Cap carpeta seleccionada</span>
   <label>Espai <input list="ax-spaces" id="ax-add-space" placeholder="nom o ruta de l'espai…" autocomplete="off" required></label>
@@ -49,39 +50,55 @@
   <label>Destí <input type="text" id="ax-add-sub" placeholder="subcarpeta (buit = arrel)" autocomplete="off"></label>
   <label>Nota <input type="text" id="ax-add-note" placeholder="opcional" autocomplete="off"></label>
   <button type="submit" class="btn btn-primary btn-sm" id="ax-add-btn" disabled>Afegeix a l'arxiu</button>
-  <span class="form-hint">Selecciona carpetes amb les caselles (Maj+clic per a un tram). Tot es pot desfer.</span>
+  <span class="form-hint">Selecciona carpetes amb les caselles (Maj+clic per a un tram), a qualsevol profunditat. Tot es pot desfer.</span>
 </form>
+
+<div class="ax-cov-head">
+  <nav class="breadcrumbs ax-crumbs" aria-label="Carpeta">
+    <a href="{{ request.url_for('arxiu_cobertura_route') }}">Tots els discs</a>
+    <span class="breadcrumbs-sep" aria-hidden="true">›</span>{% if level.crumbs %}<a href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ disc | urlencode }}">{{ disc }}</a>{% else %}<span aria-current="page">{{ disc }}</span>{% endif %}
+    {% for c in level.crumbs %}<span class="breadcrumbs-sep" aria-hidden="true">›</span>{% if loop.last %}<span aria-current="page">{{ c.name }}</span>{% else %}<a href="{{ request.url_for('arxiu_cobertura_route') }}?disc={{ disc | urlencode }}&amp;carpeta={{ c.api_path | urlencode }}">{{ c.name }}</a>{% endif %}{% endfor %}
+  </nav>
+  <span class="ax-cov-headnums">
+    <strong>{{ level.bytes | format_bytes }}</strong> <span class="muted">· {{ '{:,}'.format(level.files).replace(',', '.') }} fitxers · cobert {{ '%.1f' | format(level.covered_pct) }} %</span>
+    {% if level.uncovered_bytes %}<span class="ax-warn">· fora {{ level.uncovered_bytes | format_bytes }}</span>{% endif %}
+    {% if level.inside %}<span class="ax-badge" title="Tot el que hi ha ací és dins del membre {{ level.inside.path }}">dins de {{ level.inside.path }}</span>{% endif %}
+  </span>
+  <span class="ax-cov-headact">
+    {% if level.folder %}<a class="ax-link" href="{{ request.url_for('explorador_route') }}?drive={{ disc | urlencode }}&amp;path={{ level.api_path | urlencode }}">explorador</a>{% endif %}
+    {% if level.folder and level.uncovered_bytes and not level.inside %}<button type="button" class="btn btn-sm" id="ax-add-here" data-path="{{ level.api_path }}" title="Selecciona aquesta carpeta sencera per afegir-la a l'arxiu">Afegeix aquesta carpeta</button>{% endif %}
+  </span>
+</div>
+
+<div class="ax-toolbar ax-cov-toolbar">
+  <label class="ax-check"><input type="checkbox" id="ax-cov-hide-small" checked> amaga &lt; 1 GB</label>
+  <span class="muted" id="ax-cov-hidden"></span>
+  <span class="ax-count muted">{{ level.rows | length }} elements · ordenats per mida</span>
+</div>
+
+{% if level.rows %}
 <div class="table-wrapper">
-  <table class="ax-table ax-coverage" id="ax-coverage">
-    <thead><tr><th class="col-sel"><input type="checkbox" id="ax-sel-all" title="Selecciona totes les carpetes de nivell 1"></th><th>Carpeta</th><th class="num">Fitxers</th><th class="num">Mida</th><th title="Any de modificació amb més fitxers (i el seu %)">Any</th><th title="Classe d'anàlisi amb més bytes (i el seu %)">Tipus</th><th></th></tr></thead>
+  <table class="ax-table ax-coverage" id="ax-coverage" data-disc="{{ disc }}" data-files-url="{{ request.url_for('arxiu_cobertura_files_route') }}">
+    <thead><tr>
+      <th class="col-sel"><input type="checkbox" id="ax-sel-all" title="Selecciona totes les carpetes d'aquest nivell que tenen alguna cosa fora"></th>
+      <th class="ax-sortable" data-sort="name">Carpeta</th>
+      <th class="ax-cov-barhead" title="Part de la carpeta de dalt: cobert (verd) i fora de l'arxiu (taronja)">Cobert / fora</th>
+      <th class="num ax-sortable" data-sort="unc" title="Bytes fora de tot espai d'arxiu">Fora</th>
+      <th class="num ax-sortable ax-sort-active" data-sort="bytes" title="Mida total de la carpeta">Mida</th>
+      <th class="num" title="% del disc">% disc</th>
+      <th class="num ax-sortable ax-col-files" data-sort="files">Fitxers</th>
+      <th class="ax-sortable" data-sort="year" title="Any de modificació amb més fitxers fora de l'arxiu (i el seu %)">Any</th>
+      <th title="Classe d'anàlisi amb més bytes fora de l'arxiu (i el seu %)">Tipus</th>
+      <th class="col-act"></th>
+    </tr></thead>
     <tbody>
-      {% for g in coverage.groups %}
-      <tr class="ax-l1" data-path="{{ g.api_path }}" data-level="1">
-        <td class="col-sel">{% if g.level1 %}<input type="checkbox" class="ax-sel" aria-label="Selecciona {{ g.level1 }}">{% endif %}</td>
-        <td class="mono">{% if g.level1 %}<a href="{{ request.url_for('explorador_route') }}?drive={{ coverage.drive_id | urlencode }}&amp;path={{ g.api_path | urlencode }}" title="Obre a l'explorador">{{ g.level1 }}</a>{% else %}<span class="muted">(fitxers a l'arrel)</span>{% endif %}</td>
-        <td class="num">{{ '{:,}'.format(g.files).replace(',', '.') }}</td>
-        <td class="num bytes">{{ g.bytes | format_bytes }}</td>
-        <td class="ax-dom">{% if g.year %}{{ g.year }} <span class="muted">{{ '%.0f' | format(g.year_pct) }} %</span>{% endif %}</td>
-        <td class="ax-dom">{% if g.cls %}<span class="ax-cls ax-cls-{{ g.cls | lower }}">{{ g.cls }}</span> <span class="muted">{{ '%.0f' | format(g.cls_pct) }} %</span>{% endif %}</td>
-        <td class="col-act">{% if g.level1 %}<button type="button" class="ax-act" data-act="pick" title="Selecciona només aquesta carpeta">afegeix</button>{% endif %}</td>
-      </tr>
-      {% for ch in g.children if ch.level2 %}
-      <tr class="ax-l2" data-path="{{ ch.api_path }}" data-level="2">
-        <td class="col-sel"><input type="checkbox" class="ax-sel" aria-label="Selecciona {{ ch.level2 }}"></td>
-        <td class="mono"><span class="ax-indent"></span><a href="{{ request.url_for('explorador_route') }}?drive={{ coverage.drive_id | urlencode }}&amp;path={{ ch.api_path | urlencode }}" title="Obre a l'explorador">{{ ch.level2 }}</a></td>
-        <td class="num">{{ '{:,}'.format(ch.files).replace(',', '.') }}</td>
-        <td class="num bytes">{{ ch.bytes | format_bytes }}</td>
-        <td class="ax-dom">{% if ch.year %}{{ ch.year }} <span class="muted">{{ '%.0f' | format(ch.year_pct) }} %</span>{% endif %}</td>
-        <td class="ax-dom">{% if ch.cls %}<span class="ax-cls ax-cls-{{ ch.cls | lower }}">{{ ch.cls }}</span> <span class="muted">{{ '%.0f' | format(ch.cls_pct) }} %</span>{% endif %}</td>
-        <td class="col-act"><button type="button" class="ax-act" data-act="pick" title="Selecciona només aquesta carpeta">afegeix</button></td>
-      </tr>
-      {% endfor %}
-      {% endfor %}
+      {% with rows = level.rows, parent_path = level.api_path %}{% include "arxiu_cobertura_files.html" %}{% endwith %}
     </tbody>
   </table>
 </div>
 {% else %}
-<div class="empty-state"><p>Tot el disc és dins d'algun espai d'arxiu.</p></div>
+<div class="empty-state"><p>Aquesta carpeta és buida.</p></div>
+{% endif %}
 {% endif %}
 {% endif %}
 <p class="form-hint">Temps de càlcul: {{ '%.2f' | format(elapsed) }} s.</p>

@@ -12,9 +12,9 @@ import time
 from typing import Any
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
-from app import arxiu_actions, arxiu_cache
+from app import arxiu_actions, arxiu_cache, queries_cobertura
 from app.queries_arxiu import ROLE_NONE, ROLE_ORDER, ArxiuCalc
 from app.queries_spaces import ARCHIVE_PARENTS, SpaceError
 from app.schema import ARCHIVE_KINDS, MEMBER_ROLES
@@ -111,29 +111,66 @@ def api_tree(force: bool = False) -> dict[str, Any]:
     return {"tree": tree, "cache": arxiu_cache.info()}
 
 
-def cobertura_page(request: Request, templates, conn: sqlite3.Connection, disc: str = ""):
+def _decorate_cov_rows(rows: list[dict[str, Any]], level: int) -> None:
+    for r in rows:
+        r["api_path"] = _api_path(r["path"])
+        r["level"] = level
+        r["bytes_h"] = _format_bytes(r["bytes"])
+        r["unc_h"] = _format_bytes(r["uncovered_bytes"])
+        r["small"] = r["bytes"] < 1_000_000_000
+
+
+def _format_bytes(value: int) -> str:
+    from app.main import _format_bytes as f
+    return f(value)
+
+
+def cobertura_page(request: Request, templates, conn: sqlite3.Connection, disc: str = "", carpeta: str = ""):
+    """Resum de tots els discs o, amb `disc`, la cobertura navegable d'una carpeta (`carpeta`)."""
     t0 = time.time()
     drives = [r[0] for r in conn.execute("SELECT drive_id FROM drives ORDER BY drive_id")]
     coverage = None
+    level = None
     overview: list[dict[str, Any]] = []
     with arxiu_cache.locked() as calc:
         if disc and disc in drives:
-            coverage = calc.coverage(disc, details=True)
+            coverage = calc.coverage(disc)
             coverage["covered_pct"] = (100.0 * coverage["covered_bytes"] / coverage["drive_bytes"]
                                        if coverage["drive_bytes"] else 0.0)
-            for g in coverage["groups"]:
-                g["api_path"] = _api_path(g["level1"])
-                for ch in g["children"]:
-                    ch["api_path"] = _api_path(f"{ch['level1']}\\{ch['level2']}" if ch["level2"] else ch["level1"])
+            try:
+                level = queries_cobertura.folder_coverage(calc, disc, carpeta, arxiu_cache.stamps())
+            except SpaceError:
+                level = queries_cobertura.folder_coverage(calc, disc, "", arxiu_cache.stamps())
         else:
             for d in drives:
                 c = calc.coverage(d)
-                overview.append({k: c[k] for k in ("drive_id", "drive_files", "drive_bytes", "covered_files",
-                                                   "covered_bytes", "uncovered_files", "uncovered_bytes", "covered")})
+                o = {k: c[k] for k in ("drive_id", "drive_files", "drive_bytes", "covered_files",
+                                       "covered_bytes", "uncovered_files", "uncovered_bytes", "covered")}
+                o["pct"] = 100.0 * o["covered_bytes"] / o["drive_bytes"] if o["drive_bytes"] else 0.0
+                overview.append(o)
         ctx = _common(request, "cobertura", conn, calc)
-    ctx.update({"drives": drives, "disc": disc, "coverage": coverage, "overview": overview,
+    if level is not None:
+        _decorate_cov_rows(level["rows"], len(level["crumbs"]) + 1)
+        level["api_path"] = _api_path(level["folder"])
+        for cr in level["crumbs"]:
+            cr["api_path"] = _api_path(cr["path"])
+        level["covered_pct"] = 100.0 * level["covered_bytes"] / level["bytes"] if level["bytes"] else 0.0
+    ctx.update({"drives": drives, "disc": disc, "coverage": coverage, "overview": overview, "level": level,
                 "elapsed": time.time() - t0})
     return templates.TemplateResponse(request, "arxiu_cobertura.html", ctx)
+
+
+def cobertura_files(request: Request, templates, disc: str, carpeta: str, nivell: int):
+    """Files d'un nivell (fragment HTML) per al desplegament en línia."""
+    with arxiu_cache.locked() as calc:
+        try:
+            level = queries_cobertura.folder_coverage(calc, disc, carpeta, arxiu_cache.stamps())
+        except SpaceError as e:
+            return HTMLResponse(f'<tr><td colspan="10" class="muted">{e}</td></tr>', status_code=404)
+        ctx = _common(request, "cobertura", None, calc)
+    _decorate_cov_rows(level["rows"], max(1, nivell))
+    ctx.update({"rows": level["rows"], "disc": disc, "parent_path": _api_path(level["folder"])})
+    return templates.TemplateResponse(request, "arxiu_cobertura_files.html", ctx)
 
 
 def comprovacions_page(request: Request, templates, conn: sqlite3.Connection):
