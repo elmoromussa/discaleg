@@ -30,6 +30,18 @@ def _api_path(db_path: str) -> str:
     return (db_path or "").replace("\\", "/")
 
 
+def split_path(path: str) -> dict[str, str]:
+    r"""Trossos d'una ruta per truncar-la pel mig a la interfície: cap (primer segment), mig i cua
+    (darrer segment), de manera que «RECUPERACIO_Z\Root\Foto-Video\cataleg» es puga mostrar
+    com «RECUPERACIO_Z\…\cataleg» quan no hi cap sencera."""
+    parts = (path or "").split("\\")
+    if len(parts) == 1:
+        return {"head": "", "mid": "", "tail": parts[0]}
+    if len(parts) == 2:
+        return {"head": parts[0], "mid": "", "tail": "\\" + parts[1]}
+    return {"head": parts[0] + "\\", "mid": "\\".join(parts[1:-1]), "tail": "\\" + parts[-1]}
+
+
 def _common(request: Request, view: str, conn: sqlite3.Connection | None = None,
             calc: ArxiuCalc | None = None) -> dict[str, Any]:
     ctx = {
@@ -54,6 +66,7 @@ def _decorate(node: dict[str, Any], depth_offset: int = 0) -> None:
     for m in node["members"]:
         m["api_path"] = _api_path(m["relative_path"])
         m["role_key"] = m["role"] or ROLE_NONE
+        m["path_parts"] = split_path(m["relative_path"])
     for c in node["children"]:
         _decorate(c, depth_offset)
 

@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Discàleg{% endblock %}</title>
   <link rel="stylesheet" href="{{ static_url(request, 'style.css') }}">
+  {% block head %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
   <header class="site-header">
     <div class="header-inner container">
       <h1 class="site-title"><a href="{{ request.url_for('index') }}">Discàleg</a></h1>

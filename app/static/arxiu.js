@@ -2,14 +2,15 @@
  * Arxiu virtual — interfície de les pàgines «Arxiu» (arbre de destí, cobertura, comprovacions).
  *
  * - Arbre: plegar i desplegar amb estat persistent (localStorage), filtre de text, filtre per
- *   paper, nivell de desplegament; edició en línia de paper, destí i nota; treure i moure
- *   membres; crear, reanomenar, canviar d'estat, moure, reordenar i esborrar espais.
+ *   paper, nivell de desplegament; edició en línia de paper, destí i nota; menú ⋯ per membre
+ *   (mou, treu, explorador, cobertura, edita) i per espai (fill, reanomena, estat, mou, ordena,
+ *   esborra); amplades de columna compartides per totes les taules de membres, amb nanses a les
+ *   capçaleres i persistència («reinicia amplades» les torna al valor inicial).
  * - Cobertura: selecció múltiple de carpetes i «Afegeix a l'arxiu» (espai, paper, destí, nota).
  * - Totes les pàgines: «Desfés» (darrera acció) i registre d'accions.
  *
  * Cada acció crida l'API JSON (/api/arxiu/…) i recarrega la pàgina (el servidor té la memòria
- * cau: la recàrrega és ràpida), conservant la posició de scroll. Sense diàlegs: només confirm()
- * per a esborrar. JavaScript pur, sense dependències.
+ * cau: la recàrrega és ràpida), conservant la posició de scroll. JavaScript pur, sense dependències.
  */
 (function () {
   'use strict';
@@ -17,6 +18,7 @@
   if (!cfgEl) return;
   var cfg = JSON.parse(cfgEl.textContent || '{}');
   var API = cfg.api || '/api/arxiu';
+  var URLS = cfg.urls || {};
   var SPACES = [];
   try { SPACES = JSON.parse((document.getElementById('ax-spaces-json') || {}).textContent || '[]'); } catch (e) { SPACES = []; }
   var spaceByPath = {};
@@ -30,6 +32,19 @@
     if (cls) e.className = cls;
     if (text != null) e.textContent = text;
     return e;
+  }
+  function icon(name) {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'icon');
+    svg.setAttribute('aria-hidden', 'true');
+    var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', '#' + name);
+    svg.appendChild(use);
+    return svg;
+  }
+  function qs(params) {
+    return Object.keys(params).filter(function (k) { return params[k] != null && params[k] !== ''; })
+      .map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
   }
   function msg(text, isError) {
     if (!msgEl) return;
@@ -45,6 +60,12 @@
     var y = parseInt(sessionStorage.getItem(SCROLL_KEY), 10);
     if (y) { sessionStorage.removeItem(SCROLL_KEY); window.scrollTo(0, y); }
   } catch (e) { /* ignora */ }
+  function store(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignora */ }
+  }
+  function loadStored(key, fallback) {
+    try { var v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; } catch (e) { return fallback; }
+  }
 
   function api(method, path, body) {
     msg('Desant…');
@@ -88,7 +109,7 @@
   // Selector d'espai en línia: un <input list> que substitueix un element i crida `done(space)`
   function inlineSpacePicker(anchor, placeholder, done) {
     var wrap = el('span', 'ax-inline');
-    var input = el('input');
+    var input = el('input', 'ax-inline-ctrl');
     input.setAttribute('list', 'ax-spaces');
     input.placeholder = placeholder || 'espai de destí…';
     input.autocomplete = 'off';
@@ -110,6 +131,90 @@
     input.addEventListener('keydown', function (ev) {
       if (ev.key === 'Enter') { ev.preventDefault(); finish(); }
       if (ev.key === 'Escape') { wrap.remove(); }
+    });
+  }
+
+  // ----------------------------------------------------------------- menú ⋯ (mateix estil que l'explorador)
+  var menuEl = document.getElementById('ax-menu');
+  var menuState = { open: false, anchorBtn: null, returnFocus: null, openedAt: 0 };
+  function closeMenu() {
+    if (!menuState.open || !menuEl) return;
+    menuState.open = false;
+    menuEl.hidden = true;
+    menuEl.textContent = '';
+    if (menuState.anchorBtn) menuState.anchorBtn.setAttribute('aria-expanded', 'false');
+    var rf = menuState.returnFocus;
+    menuState.returnFocus = null;
+    menuState.anchorBtn = null;
+    if (rf && document.contains(rf)) rf.focus({ preventScroll: true });
+  }
+  function menuItems() { return Array.prototype.slice.call(menuEl.querySelectorAll('[role="menuitem"]')); }
+  /** items: {label, icon?, href?, action?, danger?} o {sep: true}; anchorBtn: el botó ⋯ */
+  function openMenu(items, anchorBtn, title) {
+    if (!menuEl) return;
+    closeMenu();
+    if (title) {
+      var head = el('div', 'explorer-menu-head', title);
+      head.title = title;
+      menuEl.appendChild(head);
+    }
+    items.forEach(function (it) {
+      if (it.sep) { menuEl.appendChild(el('div', 'explorer-menu-sep')); return; }
+      var item;
+      if (it.href) { item = el('a', 'explorer-menu-item'); item.href = it.href; }
+      else { item = el('button', 'explorer-menu-item'); item.type = 'button'; }
+      if (it.danger) item.classList.add('ax-menu-danger');
+      item.setAttribute('role', 'menuitem');
+      item.setAttribute('tabindex', '-1');
+      if (it.icon) item.appendChild(icon(it.icon));
+      item.appendChild(el('span', null, it.label));
+      item.addEventListener('click', function (e) {
+        if (it.action) { e.preventDefault(); closeMenu(); it.action(); return; }
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+        closeMenu();
+      });
+      menuEl.appendChild(item);
+    });
+    menuState.open = true;
+    menuState.openedAt = Date.now();
+    menuState.returnFocus = anchorBtn;
+    menuState.anchorBtn = anchorBtn;
+    anchorBtn.setAttribute('aria-expanded', 'true');
+    menuEl.hidden = false;
+    menuEl.style.left = '0px';
+    menuEl.style.top = '0px';
+    var w = menuEl.offsetWidth, h = menuEl.offsetHeight;
+    var r = anchorBtn.getBoundingClientRect();
+    var x = r.right - w, y = r.bottom + 4;
+    if (y + h > window.innerHeight - 8) y = Math.max(8, r.top - h - 4);
+    x = Math.max(8, Math.min(x, window.innerWidth - w - 8));
+    menuEl.style.left = x + 'px';
+    menuEl.style.top = y + 'px';
+    var first = menuItems()[0];
+    if (first) first.focus();
+  }
+  if (menuEl) {
+    menuEl.addEventListener('keydown', function (e) {
+      var items = menuItems();
+      var idx = items.indexOf(document.activeElement);
+      switch (e.key) {
+        case 'ArrowDown': items[(idx + 1) % items.length].focus(); break;
+        case 'ArrowUp': items[(idx - 1 + items.length) % items.length].focus(); break;
+        case 'Home': items[0].focus(); break;
+        case 'End': items[items.length - 1].focus(); break;
+        case 'Escape': closeMenu(); break;
+        case 'Tab': closeMenu(); return;
+        default: return;
+      }
+      e.preventDefault();
+    });
+    document.addEventListener('mousedown', function (e) {
+      if (menuState.open && !menuEl.contains(e.target)) closeMenu();
+    });
+    window.addEventListener('resize', closeMenu);
+    window.addEventListener('scroll', function () { if (menuState.open && Date.now() - menuState.openedAt > 250) closeMenu(); }, true);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && menuState.open) { e.preventDefault(); closeMenu(); }
     });
   }
 
@@ -140,6 +245,60 @@
     });
   }
 
+  // ----------------------------------------------------------------- amplades de columna compartides
+  var COLS_KEY = 'arxiu.cols.v1';
+  var COL_DEF = { role: 56, disc: 72, size: 88, uniq: 56, sub: 110, note: 220, act: 34 };
+  var COL_MIN = { role: 40, disc: 52, size: 70, uniq: 48, sub: 60, note: 80, act: 34 };
+  var COL_MAX = 900;
+  function initColumns(root) {
+    var cols = loadStored(COLS_KEY, {});
+    function apply() {
+      Object.keys(COL_DEF).forEach(function (k) {
+        var w = cols[k] || COL_DEF[k];
+        root.style.setProperty('--axc-' + k, w + 'px');
+      });
+    }
+    apply();
+    var drag = null;
+    root.addEventListener('pointerdown', function (ev) {
+      var h = ev.target.closest('.ax-rz');
+      if (!h || ev.button !== 0) return;
+      ev.preventDefault();
+      var k = h.dataset.col;
+      drag = { col: k, x0: ev.clientX, w0: cols[k] || COL_DEF[k], handle: h };
+      h.classList.add('ax-rz-active');
+      document.documentElement.classList.add('ax-resizing');
+      try { h.setPointerCapture(ev.pointerId); } catch (e) { /* ignora */ }
+    });
+    root.addEventListener('pointermove', function (ev) {
+      if (!drag) return;
+      var w = Math.round(drag.w0 + ev.clientX - drag.x0);
+      w = Math.max(COL_MIN[drag.col], Math.min(COL_MAX, w));
+      cols[drag.col] = w;
+      root.style.setProperty('--axc-' + drag.col, w + 'px');
+    });
+    function endDrag() {
+      if (!drag) return;
+      drag.handle.classList.remove('ax-rz-active');
+      document.documentElement.classList.remove('ax-resizing');
+      drag = null;
+      store(COLS_KEY, cols);
+    }
+    root.addEventListener('pointerup', endDrag);
+    root.addEventListener('pointercancel', endDrag);
+    root.addEventListener('dblclick', function (ev) {
+      var h = ev.target.closest('.ax-rz');
+      if (!h) return;
+      delete cols[h.dataset.col];
+      store(COLS_KEY, cols);
+      apply();
+    });
+    // la nansa no ha d'activar l'ordenació ni el plegat de la fila
+    root.addEventListener('click', function (ev) { if (ev.target.closest('.ax-rz')) ev.stopPropagation(); }, true);
+    var reset = document.getElementById('ax-cols-reset');
+    if (reset) reset.addEventListener('click', function () { cols = {}; store(COLS_KEY, cols); apply(); });
+  }
+
   // ----------------------------------------------------------------- arbre
   var tree = document.getElementById('ax-tree');
   if (tree) initTree();
@@ -152,6 +311,7 @@
     var chips = document.getElementById('ax-role-chips');
     var showMembers = document.getElementById('ax-show-members');
     var countEl = document.getElementById('ax-count');
+    initColumns(tree);
 
     function load() {
       try {
@@ -184,8 +344,16 @@
     }
 
     tree.addEventListener('click', function (ev) {
+      if (ev.target.closest('.ax-rz')) return;
+      var more = ev.target.closest('.ax-more');
+      if (more) { ev.preventDefault(); onMore(more); return; }
       var actBtn = ev.target.closest('.ax-act');
-      if (actBtn) { onAction(actBtn); return; }
+      if (actBtn) { onAction(actBtn.dataset.act, actBtn); return; }
+      var noteCell = ev.target.closest('.ax-note');
+      if (noteCell && !noteCell.classList.contains('ax-editing')) {
+        if (noteCell.textContent) noteCell.classList.toggle('ax-note-open');
+        return;
+      }
       var editCell = ev.target.closest('.ax-edit');
       if (editCell && !editCell.classList.contains('ax-editing')) { startEdit(editCell); return; }
       var btn = ev.target.closest('.ax-toggle');
@@ -200,6 +368,14 @@
         var li2 = row.closest('.ax-node');
         setExpanded(li2, li2.getAttribute('aria-expanded') !== 'true');
         save();
+      }
+    });
+    tree.addEventListener('dblclick', function (ev) {
+      var noteCell = ev.target.closest('.ax-note');
+      if (noteCell && !noteCell.classList.contains('ax-editing')) {
+        ev.preventDefault();
+        noteCell.classList.remove('ax-note-open');
+        startEdit(noteCell);
       }
     });
 
@@ -344,18 +520,55 @@
       ctrl.addEventListener('blur', function () { setTimeout(function () { if (!done) commit(); }, 0); });
     }
 
+    // ------------------------------------------------------------- menú ⋯ de membres i d'espais
+    function onMore(btn) {
+      if (menuState.open && menuState.anchorBtn === btn) { closeMenu(); return; }
+      var tr = btn.closest('.ax-member');
+      var li = btn.closest('.ax-node');
+      if (tr) {
+        var drive = tr.dataset.drive, apiPath = tr.dataset.apipath;
+        openMenu([
+          { label: 'Mou a un altre espai…', icon: 'i-move', action: function () { onAction('move', btn); } },
+          { label: 'Treu de l’espai', icon: 'i-trash', danger: true, action: function () { onAction('remove', btn); } },
+          { sep: true },
+          { label: 'Canvia el paper', icon: 'i-tag', action: function () { startEdit(tr.querySelector('[data-field="role"]')); } },
+          { label: 'Canvia el destí', icon: 'i-pencil', action: function () { startEdit(tr.querySelector('[data-field="target_subpath"]')); } },
+          { label: 'Edita la nota', icon: 'i-pencil', action: function () { startEdit(tr.querySelector('[data-field="note"]')); } },
+          { sep: true },
+          { label: 'Obre a l’explorador', icon: 'i-folder-open', href: (URLS.explorador || '/explorador') + '?' + qs({ drive: drive, path: apiPath }) },
+          { label: 'Cobertura del disc ' + drive, icon: 'i-drive', href: (URLS.cobertura || '/arxiu/cobertura') + '?' + qs({ disc: drive }) },
+        ], btn, tr.dataset.label);
+        return;
+      }
+      if (!li) return;
+      var kind = li.dataset.kind, sid = li.dataset.space;
+      var items = [
+        { label: 'Crea un espai fill…', icon: 'i-plus', action: function () { onAction('child', btn); } },
+        { label: 'Reanomena…', icon: 'i-pencil', action: function () { onAction('rename', btn); } },
+      ];
+      if (kind === 'projecte' || kind === 'serie') items.push({ label: 'Estat: ' + (li.dataset.state || 'sense') + '…', icon: 'i-check', action: function () { onAction('state', btn); } });
+      items.push({ label: 'Mou sota un altre espai…', icon: 'i-move', action: function () { onAction('movespace', btn); } });
+      items.push({ label: 'Puja', icon: 'i-arrow-up', action: function () { onAction('up', btn); } });
+      items.push({ label: 'Baixa', icon: 'i-arrow-down', action: function () { onAction('down', btn); } });
+      items.push({ sep: true });
+      items.push({ label: 'Mostra només aquest subarbre', icon: 'i-subtree', href: (URLS.arbre || '/arxiu') + '?arrel=' + sid });
+      items.push({ label: 'Obre l’espai a l’explorador', icon: 'i-folder-open', href: (URLS.explorador || '/explorador') + '?space=' + sid });
+      items.push({ sep: true });
+      items.push({ label: 'Esborra l’espai…', icon: 'i-trash', danger: true, action: function () { onAction('delspace', btn); } });
+      openMenu(items, btn, li.dataset.path);
+    }
+
     // ------------------------------------------------------------- accions de membres i espais
-    function onAction(btn) {
-      var a = btn.dataset.act;
+    function onAction(a, btn) {
       var tr = btn.closest('.ax-member');
       var li = btn.closest('.ax-node');
       if (tr) {
         var spaceId = tr.dataset.space, itemId = tr.dataset.item;
-        var label = tr.querySelector('.ax-path a') ? tr.querySelector('.ax-path a').textContent : itemId;
+        var label = tr.dataset.label || itemId;
         if (a === 'remove') {
           if (confirm('Treure «' + label + '» d’aquest espai? (es pot desfer)')) act('DELETE', '/members/' + spaceId + '/' + itemId);
         } else if (a === 'move') {
-          var cell = btn.closest('td');
+          var cell = tr.querySelector('.ax-path');
           inlineSpacePicker(cell, 'espai de destí…', function (s) {
             act('POST', '/members/' + spaceId + '/' + itemId + '/move', { to_space_id: s.id });
           });

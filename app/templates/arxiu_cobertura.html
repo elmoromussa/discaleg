@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Arxiu · cobertura — Discàleg{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ static_url(request, 'arxiu.css') }}">{% endblock %}
+{% block body_class %}page-wide{% endblock %}
 {% block content %}
 <h1>Arxiu <span class="h1-sub">cobertura: què queda de cada disc fora de tot espai d'arxiu</span></h1>
 {% include "arxiu_tabs.html" %}
