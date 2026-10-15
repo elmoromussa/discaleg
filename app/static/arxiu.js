@@ -14,8 +14,11 @@
  * - Totes les pàgines: commutadors «detalls» (camps per executar) i «edició» (botons d'acció),
  *   persistents a localStorage; «Desfés» (darrera acció) i registre d'accions.
  *
- * Cada acció crida l'API JSON (/api/arxiu/…) i recarrega la pàgina (el servidor té la memòria
- * cau: la recàrrega és ràpida), conservant la posició de scroll. JavaScript pur, sense dependències.
+ * Cada acció crida l'API JSON (/api/arxiu/…). Els canvis simples (paper, destí, nota d'un
+ * membre; nom i estat d'un espai) s'apliquen en línia sense recarregar; la resta recarrega la
+ * pàgina (el servidor té la memòria cau: és ràpid) conservant el scroll. Després de cada acció,
+ * un tost amb «Desfés» a dins; diàleg de confirmació propi només per esborrar un espai, amb
+ * l'abast real. JavaScript pur, sense dependències.
  */
 (function () {
   'use strict';
@@ -57,14 +60,90 @@
     msgEl.hidden = !text;
     msgEl.classList.toggle('ax-msg-error', !!isError);
   }
-  function reload() {
-    try { sessionStorage.setItem(SCROLL_KEY, String(window.scrollY)); } catch (e) { /* ignora */ }
+  var TOAST_KEY = 'arxiu.toast';
+  function reload(toast) {
+    try {
+      sessionStorage.setItem(SCROLL_KEY, String(window.scrollY));
+      if (toast) sessionStorage.setItem(TOAST_KEY, JSON.stringify(toast));
+    } catch (e) { /* ignora */ }
     location.reload();
   }
   try {
     var y = parseInt(sessionStorage.getItem(SCROLL_KEY), 10);
     if (y) { sessionStorage.removeItem(SCROLL_KEY); window.scrollTo(0, y); }
+    var pendingToast = sessionStorage.getItem(TOAST_KEY);
+    if (pendingToast) { sessionStorage.removeItem(TOAST_KEY); setTimeout(function () { showToast(JSON.parse(pendingToast)); }, 50); }
   } catch (e) { /* ignora */ }
+
+  // ----------------------------------------------------------------- tost (amb «Desfés» a dins)
+  var toastEl = document.getElementById('ax-toast');
+  var toastTimer = null;
+  function hideToast() { if (toastEl) { toastEl.hidden = true; toastEl.textContent = ''; } clearTimeout(toastTimer); }
+  /** t: {text, undo: bool, error: bool} */
+  function showToast(t) {
+    if (!toastEl) return;
+    clearTimeout(toastTimer);
+    toastEl.textContent = '';
+    toastEl.classList.toggle('ax-toast-error', !!t.error);
+    toastEl.appendChild(el('span', 'ax-toast-text', t.text));
+    if (t.undo) {
+      var u = el('button', 'btn', 'Desfés');
+      u.type = 'button';
+      u.addEventListener('click', function () {
+        u.disabled = true;
+        api('POST', '/undo').then(function (d) {
+          var what = d.undone ? d.undone.summary : 'res';
+          reload({ text: 'Desfet: ' + what });
+        }).catch(function () {});
+      });
+      toastEl.appendChild(u);
+    }
+    var x = el('button', 'ax-toast-close', '✕');
+    x.type = 'button';
+    x.setAttribute('aria-label', 'Tanca');
+    x.addEventListener('click', hideToast);
+    toastEl.appendChild(x);
+    toastEl.hidden = false;
+    toastTimer = setTimeout(hideToast, t.error ? 12000 : 9000);
+  }
+  function setLastAction(la) {
+    if (undoBtn) {
+      undoBtn.disabled = !la;
+      undoBtn.title = la ? 'Desfés: ' + la.summary : 'No hi ha cap acció per desfer';
+    }
+    var lastEl = document.getElementById('ax-last');
+    if (lastEl) lastEl.textContent = la ? la.summary : '';
+  }
+
+  // ----------------------------------------------------------------- diàleg (només per esborrar)
+  var dialogEl = document.getElementById('ax-dialog');
+  /** opts: {title, intro, scope: [[label, value]...], list: [..], okLabel}; resol true si es confirma */
+  function confirmDialog(opts) {
+    return new Promise(function (resolve) {
+      if (!dialogEl || typeof dialogEl.showModal !== 'function') { resolve(window.confirm(opts.title)); return; }
+      document.getElementById('ax-dialog-title').textContent = opts.title;
+      var body = document.getElementById('ax-dialog-body');
+      body.textContent = '';
+      if (opts.intro) body.appendChild(el('p', null, opts.intro));
+      if (opts.scope && opts.scope.length) {
+        var sc = el('div', 'ax-dialog-scope');
+        opts.scope.forEach(function (pair) { var sp = el('span', null, pair[0] + ' '); sp.appendChild(el('b', null, String(pair[1]))); sc.appendChild(sp); });
+        body.appendChild(sc);
+      }
+      if (opts.list && opts.list.length) {
+        var ul = el('ul');
+        opts.list.forEach(function (x) { ul.appendChild(el('li', null, x)); });
+        body.appendChild(ul);
+      }
+      body.appendChild(el('p', 'muted', 'Es pot desfer amb «Desfés».'));
+      document.getElementById('ax-dialog-ok').textContent = opts.okLabel || 'Esborra';
+      dialogEl.returnValue = 'cancel';
+      function onClose() { dialogEl.removeEventListener('close', onClose); resolve(dialogEl.returnValue === 'ok'); }
+      dialogEl.addEventListener('close', onClose);
+      dialogEl.showModal();
+      document.getElementById('ax-dialog-cancel').focus();
+    });
+  }
   function store(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignora */ }
   }
@@ -80,12 +159,27 @@
       body: body ? JSON.stringify(body) : undefined,
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok && !j.error, data: j }; }); })
       .then(function (res) {
-        if (!res.ok) { msg(res.data.error || 'Error', true); throw new Error(res.data.error || 'Error'); }
+        msg('');
+        if (!res.ok) { showToast({ text: res.data.error || 'Error', error: true }); throw new Error(res.data.error || 'Error'); }
         return res.data;
-      });
+      }, function (e) { msg(''); showToast({ text: 'No s’ha pogut parlar amb el servidor.', error: true }); throw e; });
   }
+  /** Acció que recarrega la pàgina (conservant el scroll) i mostra un tost amb «Desfés». */
   function act(method, path, body) {
-    return api(method, path, body).then(function (d) { reload(); return d; }).catch(function () { /* missatge ja mostrat */ });
+    return api(method, path, body).then(function (d) {
+      reload({ text: d.summary || 'Fet', undo: !!d.last_action });
+      return d;
+    }).catch(function () { /* tost d'error ja mostrat */ });
+  }
+  /** Acció aplicada en línia: `apply(d)` actualitza el DOM i no es recarrega res. */
+  function actInline(method, path, body, apply) {
+    return api(method, path, body).then(function (d) {
+      if (d.changed === false) { showToast({ text: 'Sense canvis' }); return d; }
+      apply(d);
+      setLastAction(d.last_action);
+      showToast({ text: d.summary || 'Fet', undo: !!d.last_action });
+      return d;
+    }).catch(function () {});
   }
 
   function fillDatalist() {
@@ -245,7 +339,7 @@
   var undoBtn = document.getElementById('ax-undo');
   if (undoBtn) {
     undoBtn.addEventListener('click', function () {
-      act('POST', '/undo');
+      api('POST', '/undo').then(function (d) { reload({ text: 'Desfet: ' + (d.undone ? d.undone.summary : 'res') }); }).catch(function () {});
     });
   }
   var logToggle = document.getElementById('ax-log-toggle');
@@ -533,7 +627,28 @@
         done = true;
         var body = {};
         body[field] = v || null;
-        act('PATCH', '/members/' + spaceId + '/' + itemId, body);
+        actInline('PATCH', '/members/' + spaceId + '/' + itemId, body, function () {
+          td.classList.remove('ax-editing');
+          if (field === 'role') {
+            var rk = v || 'sense-paper';
+            tr.dataset.role = rk;
+            td.innerHTML = '';
+            var chip = el('span', 'ax-role ax-role-' + rk, cfg.roleShort[rk] || '?');
+            td.appendChild(chip);
+            refreshResolution(tr.closest('.ax-node'));
+          } else if (field === 'target_subpath') {
+            tr.dataset.sub = v;
+            td.innerHTML = '';
+            if (v === '.') td.appendChild(el('span', 'muted', '(arrel)')); else td.textContent = v;
+          } else {
+            tr.dataset.note = v;
+            td.textContent = v;
+            td.title = v ? v + ' — clic per veure-la sencera; amb «edició», doble clic per editar-la' : 'Amb «edició», doble clic per afegir una nota';
+          }
+          tr.dataset.text = (tr.dataset.label + ' ' + (tr.dataset.note || '')).toLowerCase();
+          td.classList.add('ax-flash');
+          applyFilters();
+        }).then(function (d) { if (!d) cancel(); });
       }
       ctrl.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
@@ -541,6 +656,43 @@
       });
       if (field === 'role') ctrl.addEventListener('change', commit);
       ctrl.addEventListener('blur', function () { setTimeout(function () { if (!done) commit(); }, 0); });
+    }
+
+    /** Recalcula «n pendents»/✓ i els comptadors dels xips de l'espai i dels seus avantpassats. */
+    function refreshResolution(li) {
+      while (li) {
+        var members = li.querySelectorAll('.ax-member');
+        var noRole = 0, counts = {};
+        members.forEach(function (tr) { if (tr.dataset.role === 'sense-paper') noRole++; counts[tr.dataset.role] = (counts[tr.dataset.role] || 0) + 1; });
+        var missing = 0;
+        var projects = li.dataset.kind === 'projecte' ? [li] : [];
+        li.querySelectorAll('.ax-node[data-kind="projecte"]').forEach(function (p) { projects.push(p); });
+        projects.forEach(function (p) { if (!p.querySelector('.ax-member[data-role="canonica"]')) missing++; });
+        var pending = missing + noRole;
+        var res = li.querySelector(':scope > .ax-row .ax-res');
+        if (res) {
+          res.className = 'ax-res ' + (pending ? 'ax-res-pending' : 'ax-res-ok');
+          res.textContent = '';
+          if (pending) {
+            res.textContent = pending + (pending === 1 ? ' pendent' : ' pendents');
+            res.title = (missing ? missing + (missing === 1 ? ' projecte' : ' projectes') + ' sense canònica' : '') + (missing && noRole ? ' · ' : '') + (noRole ? noRole + (noRole === 1 ? ' membre' : ' membres') + ' sense paper' : '');
+          } else {
+            res.appendChild(icon('i-check'));
+            res.title = 'Resolt';
+          }
+        }
+        var roles = li.querySelector(':scope > .ax-row .ax-roles');
+        if (roles) {
+          roles.textContent = '';
+          ['canonica', 'copia', 'part', 'descartar', 'quarantena', 'tercers', 'sense-paper'].forEach(function (rk) {
+            if (!counts[rk]) return;
+            var chip = el('span', 'ax-role ax-role-' + rk, cfg.roleShort[rk] || '?');
+            chip.appendChild(el('b', null, String(counts[rk])));
+            roles.appendChild(chip);
+          });
+        }
+        li = li.parentElement ? li.parentElement.closest('.ax-node') : null;
+      }
     }
 
     // ------------------------------------------------------------- menú ⋯ de membres i d'espais
@@ -589,7 +741,7 @@
         var spaceId = tr.dataset.space, itemId = tr.dataset.item;
         var label = tr.dataset.label || itemId;
         if (a === 'remove') {
-          if (confirm('Treure «' + label + '» d’aquest espai? (es pot desfer)')) act('DELETE', '/members/' + spaceId + '/' + itemId);
+          act('DELETE', '/members/' + spaceId + '/' + itemId);
         } else if (a === 'move') {
           var cell = tr.querySelector('.ax-path');
           inlineSpacePicker(cell, 'espai de destí…', function (s) {
@@ -604,18 +756,31 @@
       if (a === 'up' || a === 'down') {
         act('POST', '/spaces/' + sid + '/reorder', { direction: a === 'up' ? -1 : 1 });
       } else if (a === 'delspace') {
-        var n = li.querySelectorAll('.ax-node').length + 1;
-        var mem = li.querySelectorAll('.ax-member').length;
-        if (confirm('Esborrar «' + li.dataset.target + '» amb ' + (n - 1) + ' espais descendents i ' + mem + ' membres? (es pot desfer)')) {
-          act('DELETE', '/spaces/' + sid);
-        }
+        var desc = Array.prototype.map.call(li.querySelectorAll('.ax-node'), function (d) { return d.dataset.path; });
+        var mems = Array.prototype.map.call(li.querySelectorAll('.ax-member'), function (m) { return m.dataset.label; });
+        confirmDialog({
+          title: 'Esborrar l’espai «' + li.dataset.path + '»?',
+          intro: 'S’esborra aquest ' + kind + (desc.length ? ', els ' + desc.length + ' espais que en pengen' : '') + (mems.length ? ' i les ' + mems.length + ' pertinences de membres' : '') + '. Cap fitxer dels discs es toca.',
+          scope: [['Espais', desc.length + 1], ['Membres', mems.length]],
+          list: desc.concat(mems.map(function (m) { return 'membre: ' + m; })).slice(0, 40).concat(desc.length + mems.length > 40 ? ['…'] : []),
+          okLabel: 'Esborra l’espai',
+        }).then(function (ok) { if (ok) act('DELETE', '/spaces/' + sid); });
       } else if (a === 'movespace') {
         inlineSpacePicker(row, 'nou espai pare…', function (s) {
           act('PATCH', '/spaces/' + sid, { parent_id: s.id });
         });
       } else if (a === 'rename') {
         inlineText(row, li.dataset.target, 'nom de destí', function (v) {
-          act('PATCH', '/spaces/' + sid, { target_name: v });
+          actInline('PATCH', '/spaces/' + sid, { target_name: v }, function () {
+            var nameEl = row.querySelector('.ax-name');
+            nameEl.textContent = v;
+            li.dataset.target = v;
+            var parentPath = li.dataset.path.lastIndexOf('\\') >= 0 ? li.dataset.path.slice(0, li.dataset.path.lastIndexOf('\\') + 1) : '';
+            li.dataset.path = parentPath + v;
+            li.dataset.name = li.dataset.path.toLowerCase();
+            nameEl.title = li.dataset.path + ' — mostra només aquest subarbre';
+            row.classList.add('ax-flash');
+          });
         });
       } else if (a === 'state') {
         var sel = el('select', 'ax-inline-ctrl');
@@ -627,7 +792,20 @@
         wrap.appendChild(sel);
         row.appendChild(wrap);
         sel.focus();
-        sel.addEventListener('change', function () { act('PATCH', '/spaces/' + sid, { state: sel.value || null }); });
+        sel.addEventListener('change', function () {
+          var v = sel.value;
+          actInline('PATCH', '/spaces/' + sid, { state: v || null }, function () {
+            wrap.remove();
+            li.dataset.state = v;
+            var st = row.querySelector('.ax-state');
+            if (st) st.remove();
+            if (v) {
+              st = el('span', 'ax-state ax-state-' + v, v);
+              row.querySelector('.ax-name').after(st);
+            }
+            row.classList.add('ax-flash');
+          });
+        });
         sel.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') wrap.remove(); });
         sel.addEventListener('blur', function () { setTimeout(function () { wrap.remove(); }, 150); });
       } else if (a === 'child') {

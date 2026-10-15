@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Arxiu · calculant — Discàleg{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ static_url(request, 'arxiu.css') }}">{% endblock %}
+{% block body_class %}page-wide{% endblock %}
+{% block content %}
+<h1>Arxiu <span class="h1-sub">arxiu virtual</span></h1>
+{% include "arxiu_tabs.html" %}
+<div class="ax-wait" id="ax-wait" data-status-url="/api/arxiu/status">
+  <div class="ax-wait-spinner" aria-hidden="true"></div>
+  <strong>Calculant l'arxiu…</strong>
+  <span>Totals per espai, únics, cobertura de cada disc i pendents. Uns 20 s amb la base de dades en memòria; més la primera vegada després d'arrencar.</span>
+  <span class="muted" id="ax-wait-seconds">{% if status.seconds %}{{ '%.0f' | format(status.seconds) }} s{% endif %}</span>
+  {% if status.error %}<p class="ax-wait-error">L'últim càlcul ha fallat: {{ status.error }}</p>{% endif %}
+</div>
+<script>
+  (function () {
+    var box = document.getElementById('ax-wait');
+    var secs = document.getElementById('ax-wait-seconds');
+    var t0 = Date.now() - ({{ (status.seconds or 0) * 1000 }});
+    function tick() {
+      secs.textContent = Math.round((Date.now() - t0) / 1000) + ' s';
+    }
+    setInterval(tick, 1000);
+    function poll() {
+      fetch(box.dataset.statusUrl, { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (st) {
+        if (st.ready) { var u = new URL(location.href); u.searchParams.delete('refresca'); location.replace(u.toString()); return; }
+        if (!st.building && st.error) { box.querySelector('strong').textContent = 'El càlcul ha fallat'; return; }
+        setTimeout(poll, 1500);
+      }).catch(function () { setTimeout(poll, 3000); });
+    }
+    setTimeout(poll, 1500);
+  })();
+</script>
+{% endblock %}

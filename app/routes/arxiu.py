@@ -81,9 +81,23 @@ def _decorate(node: dict[str, Any], depth_offset: int = 0) -> int:
     return missing
 
 
+def _waiting(request: Request, templates, conn: sqlite3.Connection, view: str, force: bool = False):
+    """La pàgina «Calculant l'arxiu…» si la memòria cau encara no és a punt (o si es força el
+    recàlcul): arranca el precàlcul en segon pla i la pàgina es recarrega sola quan acaba."""
+    if arxiu_cache.ensure_ready(force):
+        return None
+    ctx = _common(request, view, conn)
+    ctx.update({"status": arxiu_cache.status(), "n_pending": None})
+    return templates.TemplateResponse(request, "arxiu_calculant.html", ctx)
+
+
 def arbre_page(request: Request, templates, conn: sqlite3.Connection, force: bool = False,
                root: int | None = None):
     """Arbre de destí sencer o, amb `root`, només el subarbre d'un espai (amb el camí de dalt)."""
+    waiting = _waiting(request, templates, conn, "arbre", force)
+    if waiting is not None:
+        return waiting
+    force = False
     t0 = time.time()
     crumbs: list[dict[str, Any]] = []
     with arxiu_cache.locked(force) as calc:
@@ -137,6 +151,9 @@ def _format_bytes(value: int) -> str:
 
 def cobertura_page(request: Request, templates, conn: sqlite3.Connection, disc: str = "", carpeta: str = ""):
     """Resum de tots els discs o, amb `disc`, la cobertura navegable d'una carpeta (`carpeta`)."""
+    waiting = _waiting(request, templates, conn, "cobertura")
+    if waiting is not None:
+        return waiting
     t0 = time.time()
     drives = [r[0] for r in conn.execute("SELECT drive_id FROM drives ORDER BY drive_id")]
     coverage = None
@@ -237,6 +254,9 @@ def _n_pending(groups: list[dict[str, Any]]) -> int:
 
 
 def pendents_page(request: Request, templates, conn: sqlite3.Connection):
+    waiting = _waiting(request, templates, conn, "pendents")
+    if waiting is not None:
+        return waiting
     t0 = time.time()
     with arxiu_cache.locked() as calc:
         drives = _drives_coverage(calc, conn)
@@ -249,8 +269,11 @@ def pendents_page(request: Request, templates, conn: sqlite3.Connection):
 
 def inici_page(request: Request, templates, conn: sqlite3.Connection, force: bool = False):
     """Pàgina d'entrada de l'Arxiu: quatre xifres i la llista de discs amb el % cobert."""
+    waiting = _waiting(request, templates, conn, "inici", force)
+    if waiting is not None:
+        return waiting
     t0 = time.time()
-    with arxiu_cache.locked(force) as calc:
+    with arxiu_cache.locked() as calc:
         roots = [calc.space_totals(r) for r in calc.roots]
         root_names = [(calc.spaces[r]["target_name"], calc.spaces[r]["archive_kind"]) for r in calc.roots]
         drives = _drives_coverage(calc, conn)

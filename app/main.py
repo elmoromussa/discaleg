@@ -169,6 +169,31 @@ def arxiu_comprovacions_route(request: Request):
     return RedirectResponse(url=str(request.url_for("arxiu_pendents_route")), status_code=301)
 
 
+@app.on_event("startup")
+def arxiu_precalc_on_startup() -> None:
+    """Precalcula l'arxiu virtual en segon pla en arrancar, si la DB existeix i té l'esquema."""
+    try:
+        from app import arxiu_cache, schema
+        if not database_path.is_file():
+            return
+        conn = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+        try:
+            ok = schema.get_user_version(conn) >= 12
+        finally:
+            conn.close()
+        if ok:
+            arxiu_cache.build_in_background()
+    except Exception:  # noqa: BLE001 — mai ha d'impedir arrancar el servidor
+        pass
+
+
+@app.get("/api/arxiu/status")
+def api_arxiu_status():
+    """Estat de la memòria cau de l'arxiu virtual (a punt, calculant, segons, error)."""
+    from app import arxiu_cache
+    return arxiu_cache.status()
+
+
 @app.get("/api/arxiu/tree")
 def api_arxiu_tree(refresca: int = 0, conn: sqlite3.Connection = Depends(get_db)):
     """Arbre de destí (JSON): espais d'arxiu amb totals recursius i membres amb ruta final."""

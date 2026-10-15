@@ -24,7 +24,8 @@ from app.queries_arxiu import ArxiuCalc
 
 _lock = threading.RLock()
 _state: dict[str, Any] = {"conn": None, "calc": None, "inv_stamp": None, "mem_stamp": None,
-                          "built_utc": None, "elapsed": 0.0}
+                          "built_utc": None, "elapsed": 0.0,
+                          "building": False, "build_started": None, "build_error": None}
 
 
 def _open() -> sqlite3.Connection:
@@ -102,6 +103,65 @@ class locked:
 
 def info() -> dict[str, Any]:
     return {"built_utc": _state["built_utc"], "elapsed": _state["elapsed"]}
+
+
+# ---------------------------------------------------------------------------
+# Precàlcul en segon pla: un fil construeix la memòria cau (i l'escalfa amb l'arbre, la
+# cobertura de tots els discs i les comprovacions) mentre les pàgines mostren «Calculant…».
+# Les pàgines consulten `ready()` sense el cadenat; l'API s'espera al cadenat com sempre.
+# ---------------------------------------------------------------------------
+
+def ready() -> bool:
+    return _state["calc"] is not None and not _state["building"]
+
+
+def status() -> dict[str, Any]:
+    started = _state["build_started"]
+    return {"ready": ready(), "building": _state["building"],
+            "seconds": round(time.time() - started, 1) if _state["building"] and started else None,
+            "built_utc": _state["built_utc"], "error": _state["build_error"]}
+
+
+def _warm(calc: ArxiuCalc) -> None:
+    """Escalfa el que les pàgines demanen primer: arbre sencer, cobertura per disc i comprovacions."""
+    calc.virtual_tree()
+    for d in [r[0] for r in calc.conn.execute("SELECT drive_id FROM drives ORDER BY drive_id")]:
+        calc.coverage(d)
+    calc.check()
+
+
+_flag_lock = threading.Lock()   # només per al senyal «calculant» (el cadenat gran el té el fil)
+
+
+def build_in_background(force: bool = False) -> bool:
+    """Arranca el precàlcul en un fil si no n'hi ha cap en marxa. Torna True si l'ha arrancat."""
+    with _flag_lock:
+        if _state["building"]:
+            return False
+        _state["building"] = True
+        _state["build_started"] = time.time()
+
+    def run() -> None:
+        try:
+            with _lock:
+                calc = get_calc(force)
+                _warm(calc)
+            _state["build_error"] = None
+        except Exception as e:  # noqa: BLE001 — l'error es mostra a la pàgina d'espera
+            _state["build_error"] = str(e)
+        finally:
+            _state["building"] = False
+
+    threading.Thread(target=run, name="arxiu-precalc", daemon=True).start()
+    return True
+
+
+def ensure_ready(force: bool = False) -> bool:
+    """True si la memòria cau és a punt; si no, arranca el precàlcul en segon pla i torna False."""
+    if ready() and not force:
+        return True
+    build_in_background(force)
+    return False
 
 
 def stamps() -> tuple[Any, Any]:

@@ -41,6 +41,17 @@
 </nav>
 <div id="ax-log" class="ax-log" hidden></div>
 <div id="ax-menu" class="explorer-menu" role="menu" hidden></div>
+<div id="ax-toast" class="ax-toast" role="status" aria-live="polite" hidden></div>
+<dialog id="ax-dialog" class="ax-dialog" aria-labelledby="ax-dialog-title">
+  <form method="dialog">
+    <h2 id="ax-dialog-title" class="ax-dialog-title"></h2>
+    <div id="ax-dialog-body" class="ax-dialog-body"></div>
+    <div class="ax-dialog-actions">
+      <button type="submit" value="cancel" class="btn btn-sm" id="ax-dialog-cancel" autofocus>Cancel·la</button>
+      <button type="submit" value="ok" class="btn btn-sm btn-delete" id="ax-dialog-ok">Esborra</button>
+    </div>
+  </form>
+</dialog>
 <datalist id="ax-spaces"></datalist>
 <script type="application/json" id="ax-spaces-json">{{ spaces_json | safe }}</script>
 <script type="application/json" id="ax-config">{"api": "/api/arxiu", "roles": {{ roles | tojson }}, "kinds": {{ kinds | tojson }}, "parents": {{ archive_parents | tojson }}, "roleShort": {{ role_short | tojson }}, "urls": {"explorador": "{{ request.url_for('explorador_route') }}", "cobertura": "{{ request.url_for('arxiu_cobertura_route') }}", "arbre": "{{ request.url_for('arxiu_arbre_route') }}"}}</script>

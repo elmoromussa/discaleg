@@ -75,7 +75,7 @@ El càlcul del SHA-256 per fitxer es fa amb `python tools/hash_files.py` (vegeu 
 | **Extensions** | Estadístiques per extensió (paginat). |
 | **Carpetes** | Llistat de carpetes per mida (paginat). |
 | **Explorador** | Arbre de carpetes i fitxers des de la DB (sense accés al sistema de fitxers) i panell d'espais virtuals (cerques desades). Clic dret, botó ⋯ o Maj+F10 sobre un element: cerca dins la carpeta, exportació a CSV, còpies d'un fitxer, copiar la ruta. |
-| **Arxiu** | Arxiu virtual: arbre de destí amb totals per paper i únics, cobertura de cada disc amb afegir en bloc, comprovacions, edició en línia i desfer. |
+| **Arxiu** | Arxiu virtual: pàgina d'entrada amb xifres i discs, arbre de destí amb totals per paper i únics, cobertura navegable de cada disc carpeta a carpeta amb afegir en bloc, pendents ordenats per feina; commutadors «detalls» i «edició», edició en línia, tost amb «Desfés» després de cada acció. |
 | **Còpies** | Fitxers amb còpia única (per disc o carpeta, amb resum de tots els discs) i comparació «tot el que hi ha a A és també a B?». Per contingut (hash) o, mentre no n'hi hagi, per nom i mida. |
 | **Discs** | Auditar i incorporar o actualitzar discs; fitxa de cada disc (etiqueta, tipus, ubicació, notes); vista «Canvis» per escaneig. |
 
