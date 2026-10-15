@@ -429,6 +429,13 @@
     var showMembers = document.getElementById('ax-show-members');
     var countEl = document.getElementById('ax-count');
     initColumns(tree);
+    // les capçaleres fixes de les taules de membres s'aturen sota el resum fix
+    var summary = document.querySelector('.ax-summary-sticky');
+    function setStickyTop() {
+      if (summary) document.documentElement.style.setProperty('--sticky-top', (summary.offsetHeight + 4) + 'px');
+    }
+    setStickyTop();
+    window.addEventListener('resize', setStickyTop);
 
     function load() {
       try {

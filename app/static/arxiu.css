@@ -220,27 +220,7 @@ body.page-wide .container { max-width: none; padding-left: 1.5rem; padding-right
   margin-bottom: 0.5rem;
   font-size: 0.88rem;
 }
-.ax-filter {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--card-bg);
-  padding: 0 0.4rem;
-  min-width: 280px;
-}
-.ax-filter .icon { width: 12px; height: 12px; color: var(--text-muted); transform: rotate(90deg); }
-.ax-filter input {
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  padding: 0.3rem 0.2rem;
-  width: 100%;
-  font-size: 0.88rem;
-}
-.ax-filter input:focus { outline: none; }
-.ax-filter:focus-within { border-color: var(--primary); }
+.ax-filter { width: 300px; }
 .ax-chips { display: inline-flex; gap: 0.25rem; }
 .ax-chip { cursor: pointer; opacity: 0.55; border-width: 1px; }
 .ax-chip[aria-pressed="true"] { opacity: 1; box-shadow: 0 0 0 2px var(--primary-bg); }
@@ -529,6 +509,6 @@ html.dark .ax-role { color: #1e1e1e; }
   .ax-members { margin-left: 0; width: 100%; min-width: 0; }
   .ax-members col.c-note, .ax-members col.c-sub { width: 0; }
   .ax-members .ax-note, .ax-members .ax-sub, .ax-members th:nth-child(6), .ax-members th:nth-child(7) { display: none; }
-  .ax-filter { min-width: 100%; }
+  .ax-filter, .ax-toolbar .filterbar { width: 100%; }
   .ax-count { margin-left: 0; }
 }

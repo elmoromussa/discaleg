@@ -2995,3 +2995,71 @@ html.dark .copies-warn {
     display: none;
   }
 }
+
+/* --- Coherència entre pàgines: barra de filtre, capçaleres fixes, densitat --- */
+/* Barra de filtre compartida (la de l'explorador és la mateixa) */
+.filterbar,
+.explorer-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  width: 260px;
+  max-width: 100%;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.filterbar:focus-within,
+.explorer-filter:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-bg);
+}
+.filterbar .icon { width: 14px; height: 14px; flex-shrink: 0; }
+.filterbar input,
+.explorer-filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  outline: none;
+  padding: 0;
+}
+.filterbar-active { border-color: var(--primary); }
+.filterbar-count { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+tr.rf-hidden { display: none; }
+
+/* Capçaleres de taula fixes (l'explorador ja les té): Còpies i Arxiu */
+.copies-table thead th,
+.ax-table thead th,
+.ax-members thead th {
+  position: sticky;
+  top: var(--sticky-top, 0);
+  z-index: 2;
+  background: var(--th-bg);
+}
+.ax-members thead th { z-index: 1; }
+/* les capçaleres fixes no funcionen dins d'un contenidor amb overflow: a Còpies i Arxiu el contenidor no retalla */
+.table-wrapper:has(.copies-table),
+.table-wrapper:has(.ax-table) { overflow-x: visible; }
+
+/* Densitat compacta: files més baixes a totes les taules i llistats */
+html.compact { --explorer-row-h: 24px; --ax-row-h: 22px; }
+html.compact th,
+html.compact td { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+html.compact .ax-table th,
+html.compact .ax-table td { padding-top: 0.12rem; padding-bottom: 0.12rem; }
+html.compact .ax-members th,
+html.compact .ax-members td { padding-top: 0.05rem; padding-bottom: 0.05rem; line-height: 1.25; }
+html.compact .explorer-table thead th { height: 26px; }
+html.compact .ax-figure { padding: 0.5rem 0.8rem; }
+html.compact .ax-figure-num { font-size: 1.4rem; }
+html.compact .card { padding: 0.8rem 1rem; }
+html.compact .ax-addbar { padding: 0.4rem 0.8rem; }
+.btn-density[aria-pressed="true"] { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }

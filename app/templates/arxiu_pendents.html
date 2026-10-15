@@ -9,6 +9,9 @@
 <h1>Arxiu <span class="h1-sub">pendents: el que queda per decidir, ordenat per feina</span></h1>
 {% include "arxiu_tabs.html" %}
 
+<div class="ax-toolbar">
+  <label class="filterbar"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" class="js-rowfilter" id="ax-pend-filter" data-target=".ax-findings" data-count="#ax-pend-filter-count" placeholder="Filtra per carpeta, disc o espai…" autocomplete="off" aria-label="Filtra les línies"><span class="filterbar-count" id="ax-pend-filter-count"></span></label>
+</div>
 <div class="ax-chips ax-pend-chips" id="ax-pend-chips" role="group" aria-label="Filtra per tipus de pendent">
   {% for g in groups %}<button type="button" class="ax-chip-static ax-pend-chip ax-pend-chip-{{ g.severity }}" data-group="{{ g.key }}" aria-pressed="false" title="{{ g.hint }}">{{ g.title }} <b>{{ g.n }}</b></button>{% endfor %}
   <span class="muted ax-pend-total">{{ n_pending }} per decidir · {{ n_all }} línies en total</span>

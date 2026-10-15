@@ -114,7 +114,7 @@
 </section>
 
 <div class="ax-toolbar" id="ax-toolbar">
-  <label class="ax-filter"><svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg><input type="search" id="ax-filter" placeholder="Filtra per nom, disc, carpeta o nota…" autocomplete="off" aria-label="Filtra l'arbre"></label>
+  <label class="filterbar ax-filter"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="ax-filter" placeholder="Filtra per nom, disc, carpeta o nota…" autocomplete="off" aria-label="Filtra l'arbre"></label>
   <div class="ax-chips" id="ax-role-chips" role="group" aria-label="Filtra membres per paper">
     {% for rk in role_order %}<button type="button" class="ax-chip ax-role ax-role-{{ rk }}" data-role="{{ rk }}" aria-pressed="false" title="{{ role_label[rk] }}">{{ role_short[rk] }}</button>{% endfor %}
   </div>

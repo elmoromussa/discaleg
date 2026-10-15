@@ -125,6 +125,7 @@
     <a href="{{ url_folders }}" class="changes-tab{% if show == 'folders' %} active{% endif %}">Per carpetes</a>
     <a href="{{ url_list }}" class="changes-tab{% if show == 'list' %} active{% endif %}">Llista de fitxers</a>
   </nav>
+  <label class="filterbar" title="Filtra les files de la taula per text"><svg class="icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><input type="search" class="js-rowfilter" id="copies-filter" data-target=".copies-results" data-count="#copies-filter-count" placeholder="Filtra per carpeta o nom…" autocomplete="off" aria-label="Filtra les files"><span class="filterbar-count" id="copies-filter-count"></span></label>
   <nav class="breadcrumbs copies-crumbs" aria-label="Carpeta dins l'àmbit">
     <a href="{{ url_root_prefix }}">{{ drive }}{% if path %} › {{ path.replace('/', ' › ') }}{% endif %}</a>
     {% for c in crumbs %}<span class="breadcrumbs-sep" aria-hidden="true">›</span>{% if loop.last %}<span aria-current="page">{{ c.name }}</span>{% else %}<a href="{{ c.url }}">{{ c.name }}</a>{% endif %}{% endfor %}
@@ -134,7 +135,7 @@
 {% if groups is not none %}
   {% if groups %}
   <div class="table-wrapper">
-    <table class="copies-table">
+    <table class="copies-table copies-results">
       <thead><tr><th>Carpeta</th><th class="num">Fitxers {% if view == 'compare' %}que falten{% else %}sense còpia{% endif %}</th><th class="num">Mida</th><th></th></tr></thead>
       <tbody>
         {% for g in groups %}
@@ -162,7 +163,7 @@
 {% if rows is not none %}
   {% if rows %}
   <div class="table-wrapper">
-    <table class="copies-table">
+    <table class="copies-table copies-results">
       <thead><tr><th>Carpeta</th><th>Fitxer</th><th class="num">Mida</th><th>Modificat</th></tr></thead>
       <tbody>
         {% for r in rows %}

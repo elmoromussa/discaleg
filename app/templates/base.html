@@ -13,6 +13,7 @@
       <h1 class="site-title"><a href="{{ request.url_for('index') }}">Discàleg</a></h1>
       <div class="header-actions">
         <button type="button" class="btn btn-theme" id="theme-toggle" title="Canviar tema">Tema</button>
+        <button type="button" class="btn btn-theme btn-density" id="density-toggle" title="Densitat normal (clic per a la compacta)" aria-pressed="false" aria-label="Densitat compacta o normal">Densitat</button>
         <nav class="site-nav">
           <ul class="nav-list">
             <li><a href="{{ request.url_for('index') }}" class="{% if request.url.path == '/' %}active{% endif %}">Inici</a></li>
@@ -44,6 +45,12 @@
     if (themeToggle) {
       themeToggle.addEventListener('click', function () {
         window.inventariToggleTheme && window.inventariToggleTheme();
+      });
+    }
+    var densityToggle = document.getElementById('density-toggle');
+    if (densityToggle) {
+      densityToggle.addEventListener('click', function () {
+        window.inventariToggleDensity && window.inventariToggleDensity();
       });
     }
   </script>
